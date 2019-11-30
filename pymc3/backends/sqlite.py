@@ -75,7 +75,7 @@ class SQLite(base.BaseTrace):
     """
 
     def __init__(self, name, model=None, vars=None, test_point=None):
-        super(SQLite, self).__init__(name, model, vars, test_point)
+        super().__init__(name, model, vars, test_point)
         self._var_cols = {}
         self.var_inserts = {}  # varname -> insert statement
         self.draw_idx = 0
@@ -113,12 +113,13 @@ class SQLite(base.BaseTrace):
             self._create_table()
             self._is_setup = True
         self._create_insert_queries()
+        self._closed = False
 
     def _create_table(self):
         template = TEMPLATES['table']
         with self.db.con:
             for varname, var_cols in self._var_cols.items():
-                if np.issubdtype(self.var_dtypes[varname], np.int):
+                if np.issubdtype(self.var_dtypes[varname], np.integer):
                     dtype = 'INT'
                 else:
                     dtype = 'FLOAT'
@@ -164,8 +165,11 @@ class SQLite(base.BaseTrace):
                 self._queue[varname] = []
 
     def close(self):
+        if self._closed:
+            return
         self._execute_queue()
         self.db.close()
+        self._closed = True
 
     # Selection methods
 
@@ -266,7 +270,7 @@ class SQLite(base.BaseTrace):
         return var_values
 
 
-class _SQLiteDB(object):
+class _SQLiteDB:
 
     def __init__(self, name):
         self.name = name
@@ -343,8 +347,7 @@ def _get_var_strs(cursor, varname):
 def _get_chain_list(cursor, varname):
     """Return a list of sorted chains for `varname`."""
     cursor.execute('SELECT DISTINCT chain FROM [{}]'.format(varname))
-    chains = [chain[0] for chain in cursor.fetchall()]
-    chains.sort()
+    chains = sorted([chain[0] for chain in cursor.fetchall()])
     return chains
 
 

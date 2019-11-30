@@ -9,7 +9,7 @@ __all__ = [
 ]
 
 
-class Callback(object):
+class Callback:
     def __call__(self, approx, loss, i):
         raise NotImplementedError
 
@@ -74,7 +74,7 @@ class CheckParametersConvergence(Callback):
         self.prev = current
         norm = np.linalg.norm(delta, self.ord)
         if norm < self.tolerance:
-            raise StopIteration('Convergence archived at %d' % i)
+            raise StopIteration('Convergence achieved at %d' % i)
 
     @staticmethod
     def flatten_shared(shared_list):
@@ -96,7 +96,7 @@ class Tracker(Callback):
 
     Examples
     --------
-    Consider we want time on each iteration    
+    Consider we want time on each iteration
     >>> import time
     >>> tracker = Tracker(time=time.time)
     >>> with model:

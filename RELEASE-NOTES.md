@@ -1,29 +1,238 @@
 # Release Notes
 
-## PyMC 3.4 (unreleased)
+## PyMC3 3.8 (on deck)
+
+### New features
+- Implemented robust u turn check in NUTS (similar to stan-dev/stan#2800). See PR [#3605]
+- Add capabilities to do inference on parameters in a differential equation with `DifferentialEquation`. See [#3590](https://github.com/pymc-devs/pymc3/pull/3590) and [#3634](https://github.com/pymc-devs/pymc3/pull/3634).
+- Distinguish between `Data` and `Deterministic` variables when graphing models with graphviz. PR [#3491](https://github.com/pymc-devs/pymc3/pull/3491).
+- Sequential Monte Carlo - Approximate Bayesian Computation step method is now available. The implementation is in an experimental stage and will be further improved.
+- Added `Matern12` covariance function for Gaussian processes. This is the Matern kernel with nu=1/2.
+- Progressbar reports number of divergences in real time, when available [#3547](https://github.com/pymc-devs/pymc3/pull/3547).
+- Sampling from variational approximation now allows for alternative trace backends [#3550].
+- Infix `@` operator now works with random variables and deterministics [#3619](https://github.com/pymc-devs/pymc3/pull/3619).
+- [ArviZ](https://arviz-devs.github.io/arviz/) is now a requirement, and handles plotting, diagnostics, and statistical checks.
+- Can use GaussianRandomWalk in sample_prior_predictive and sample_prior_predictive [#3682](https://github.com/pymc-devs/pymc3/pull/3682)
+- Now 11 years of S&P returns in data set[#3682](https://github.com/pymc-devs/pymc3/pull/3682)
+
+### Maintenance
+- Moved math operations out of `Rice`, `TruncatedNormal`, `Triangular` and `ZeroInflatedNegativeBinomial` `random` methods. Math operations on values returned by `draw_values` might not broadcast well, and all the `size` aware broadcasting is left to `generate_samples`. Fixes [#3481](https://github.com/pymc-devs/pymc3/issues/3481) and [#3508](https://github.com/pymc-devs/pymc3/issues/3508)
+- Parallelization of population steppers (`DEMetropolis`) is now set via the `cores` argument. ([#3559](https://github.com/pymc-devs/pymc3/pull/3559))
+- Fixed a bug in `Categorical.logp`. In the case of multidimensional `p`'s, the indexing was done wrong leading to incorrectly shaped tensors that consumed `O(n**2)` memory instead of `O(n)`. This fixes issue [#3535](https://github.com/pymc-devs/pymc3/issues/3535)
+- Fixed a defect in `OrderedLogistic.__init__` that unnecessarily increased the dimensionality of the underlying `p`. Related to issue issue [#3535](https://github.com/pymc-devs/pymc3/issues/3535) but was not the true cause of it.
+- SMC: stabilize covariance matrix [3573](https://github.com/pymc-devs/pymc3/pull/3573)
+- SMC: is no longer a step method of `pm.sample` now it should be called using `pm.sample_smc` [3579](https://github.com/pymc-devs/pymc3/pull/3579)
+- SMC: improve computation of the proposal scaling factor [3594](https://github.com/pymc-devs/pymc3/pull/3594) and [3625](https://github.com/pymc-devs/pymc3/pull/3625)
+- SMC: reduce number of logp evaluations [3600](https://github.com/pymc-devs/pymc3/pull/3600)
+- SMC: remove `scaling` and `tune_scaling` arguments as is a better idea to always allow SMC to automatically compute the scaling factor [3625](https://github.com/pymc-devs/pymc3/pull/3625)
+- Now uses `multiprocessong` rather than `psutil` to count CPUs, which results in reliable core counts on Chromebooks.
+- `sample_posterior_predictive` now preallocates the memory required for its output to improve memory usage. Addresses problems raised in this [discourse thread](https://discourse.pymc.io/t/memory-error-with-posterior-predictive-sample/2891/4).
+- Fixed a bug in `Categorical.logp`. In the case of multidimensional `p`'s, the indexing was done wrong leading to incorrectly shaped tensors that consumed `O(n**2)` memory instead of `O(n)`. This fixes issue [#3535](https://github.com/pymc-devs/pymc3/issues/3535)
+- Fixed a defect in `OrderedLogistic.__init__` that unnecessarily increased the dimensionality of the underlying `p`. Related to issue issue [#3535](https://github.com/pymc-devs/pymc3/issues/3535) but was not the true cause of it.
+- Wrapped `DensityDist.rand` with `generate_samples` to make it aware of the distribution's shape. Added control flow attributes to still be able to behave as in earlier versions, and to control how to interpret the `size` parameter in the `random` callable signature. Fixes [3553](https://github.com/pymc-devs/pymc3/issues/3553)
+- Added `theano.gof.graph.Constant` to type checks done in `_draw_value` (fixes issue [3595](https://github.com/pymc-devs/pymc3/issues/3595))
+- `HalfNormal` did not used to work properly in `draw_values`, `sample_prior_predictive`, or `sample_posterior_predictive` (fixes issue [3686](https://github.com/pymc-devs/pymc3/pull/3686))
+- Random variable transforms were inadvertently left out of the API documentation. Added them. (See PR [3690](https://github.com/pymc-devs/pymc3/pull/3690)).
+
+## PyMC3 3.7 (May 29 2019)
+
+### New features
+
+- Add data container class (`Data`) that wraps the theano SharedVariable class and let the model be aware of its inputs and outputs.
+- Add function `set_data` to update variables defined as `Data`.
+- `Mixture` now supports mixtures of multidimensional probability distributions, not just lists of 1D distributions.
+- `GLM.from_formula` and `LinearComponent.from_formula` can extract variables from the calling scope. Customizable via the new `eval_env` argument. Fixing [#3382](https://github.com/pymc-devs/pymc3/issues/3382).
+- Added the `distributions.shape_utils` module with functions used to help broadcast samples drawn from distributions using the `size` keyword argument.
+- Used `numpy.vectorize` in `distributions.distribution._compile_theano_function`. This enables `sample_prior_predictive` and `sample_posterior_predictive` to ask for tuples of samples instead of just integers. This fixes issue [#3422](https://github.com/pymc-devs/pymc3/issues/3422).
+
+### Maintenance
+
+- All occurances of `sd` as a parameter name have been renamed to `sigma`. `sd` will continue to function for backwards compatibility.
+- `HamiltonianMC` was ignoring certain arguments like `target_accept`, and not using the custom step size jitter function with expectation 1.
+- Made `BrokenPipeError` for parallel sampling more verbose on Windows.
+- Added the `broadcast_distribution_samples` function that helps broadcasting arrays of drawn samples, taking into account the requested `size` and the inferred distribution shape. This sometimes is needed by distributions that call several `rvs` separately within their `random` method, such as the `ZeroInflatedPoisson` (fixes issue [#3310](https://github.com/pymc-devs/pymc3/issues/3310)).
+- The `Wald`, `Kumaraswamy`, `LogNormal`, `Pareto`, `Cauchy`, `HalfCauchy`, `Weibull` and `ExGaussian` distributions `random` method used a hidden `_random` function that was written with scalars in mind. This could potentially lead to artificial correlations between random draws. Added shape guards and broadcasting of the distribution samples to prevent this (Similar to issue [#3310](https://github.com/pymc-devs/pymc3/issues/3310)).
+- Added a fix to allow the imputation of single missing values of observed data, which previously would fail (fixes issue [#3122](https://github.com/pymc-devs/pymc3/issues/3122)).
+- The `draw_values` function was too permissive with what could be grabbed from inside `point`, which lead to an error when sampling posterior predictives of variables that depended on shared variables that had changed their shape after `pm.sample()` had been called (fix issue [#3346](https://github.com/pymc-devs/pymc3/issues/3346)).
+- `draw_values` now adds the theano graph descendants of `TensorConstant` or `SharedVariables` to the named relationship nodes stack, only if these descendants are `ObservedRV` or `MultiObservedRV` instances (fixes issue [#3354](https://github.com/pymc-devs/pymc3/issues/3354)).
+- Fixed bug in broadcast_distrution_samples, which did not handle correctly cases in which some samples did not have the size tuple prepended.
+- Changed `MvNormal.random`'s usage of `tensordot` for Cholesky encoded covariances. This lead to wrong axis broadcasting and seemed to be the cause for issue [#3343](https://github.com/pymc-devs/pymc3/issues/3343).
+- Fixed defect in `Mixture.random` when multidimensional mixtures were involved. The mixture component was not preserved across all the elements of the dimensions of the mixture. This meant that the correlations across elements within a given draw of the mixture were partly broken.
+- Restructured `Mixture.random` to allow better use of vectorized calls to `comp_dists.random`.
+- Added tests for mixtures of multidimensional distributions to the test suite.
+- Fixed incorrect usage of `broadcast_distribution_samples` in `DiscreteWeibull`.
+- `Mixture`'s default dtype is now determined by `theano.config.floatX`.
+- `dist_math.random_choice` now handles nd-arrays of category probabilities, and also handles sizes that are not `None`. Also removed unused `k` kwarg from `dist_math.random_choice`.
+- Changed `Categorical.mode` to preserve all the dimensions of `p` except the last one, which encodes each category's probability.
+- Changed initialization of `Categorical.p`. `p` is now normalized to sum to `1` inside `logp` and `random`, but not during initialization. This could hide negative values supplied to `p` as mentioned in [#2082](https://github.com/pymc-devs/pymc3/issues/2082).
+- `Categorical` now accepts elements of `p` equal to `0`. `logp` will return `-inf` if there are `values` that index to the zero probability categories.
+- Add `sigma`, `tau`, and `sd` to signature of `NormalMixture`.
+- Set default lower and upper values of -inf and inf for pm.distributions.continuous.TruncatedNormal. This avoids errors caused by their previous values of None (fixes issue [#3248](https://github.com/pymc-devs/pymc3/issues/3248)).
+- Converted all calls to `pm.distributions.bound._ContinuousBounded` and `pm.distributions.bound._DiscreteBounded` to use only and all positional arguments (fixes issue [#3399](https://github.com/pymc-devs/pymc3/issues/3399)).
+- Restructured `distributions.distribution.generate_samples` to use the `shape_utils` module. This solves issues [#3421](https://github.com/pymc-devs/pymc3/issues/3421) and [#3147](https://github.com/pymc-devs/pymc3/issues/3147) by using the `size` aware broadcating functions in `shape_utils`.
+- Fixed the `Multinomial.random` and `Multinomial.random_` methods to make them compatible with the new `generate_samples` function. In the process, a bug of the `Multinomial.random_` shape handling was discovered and fixed.
+- Fixed a defect found in `Bound.random` where the `point` dictionary was passed to `generate_samples` as an `arg` instead of in `not_broadcast_kwargs`.
+- Fixed a defect found in `Bound.random_` where `total_size` could end up as a `float64` instead of being an integer if given `size=tuple()`.
+- Fixed an issue in `model_graph` that caused construction of the graph of the model for rendering to hang: replaced a search over the powerset of the nodes with a breadth-first search over the nodes. Fix for [#3458](https://github.com/pymc-devs/pymc3/issues/3458).
+- Removed variable annotations from `model_graph` but left type hints (Fix for [#3465](https://github.com/pymc-devs/pymc3/issues/3465)). This means that we support `python>=3.5.4`.
+- Default `target_accept`for `HamiltonianMC` is now 0.65, as suggested in Beskos et. al. 2010 and Neal 2001.
+- Fixed bug in `draw_values` that lead to intermittent errors in python3.5. This happened with some deterministic nodes that were drawn but not added to `givens`.
+
+### Deprecations
+
+- `nuts_kwargs` and `step_kwargs` have been deprecated in favor of using the standard `kwargs` to pass optional step method arguments.
+- `SGFS` and `CSG` have been removed (Fix for [#3353](https://github.com/pymc-devs/pymc3/issues/3353)). They have been moved to [pymc3-experimental](https://github.com/pymc-devs/pymc3-experimental).
+- References to `live_plot` and corresponding notebooks have been removed.
+- Function `approx_hessian` was removed, due to `numdifftools` becoming incompatible with current `scipy`. The function was already optional, only available to a user who installed `numdifftools` separately, and not hit on any common codepaths. [#3485](https://github.com/pymc-devs/pymc3/pull/3485).
+- Deprecated `vars` parameter of `sample_posterior_predictive` in favor of `varnames`.
+-  References to `live_plot` and corresponding notebooks have been removed.
+- Deprecated `vars` parameters of `sample_posterior_predictive` and `sample_prior_predictive` in favor of `var_names`.  At least for the latter, this is more accurate, since the `vars` parameter actually took names.
+
+### Contributors sorted by number of commits
+    45  Luciano Paz
+    38  Thomas Wiecki
+    23  Colin Carroll
+    19  Junpeng Lao
+    15  Chris Fonnesbeck
+    13  Juan Martín Loyola
+    13  Ravin Kumar
+     8  Robert P. Goldman
+     5  Tim Blazina
+     4  chang111
+     4  adamboche
+     3  Eric Ma
+     3  Osvaldo Martin
+     3  Sanmitra Ghosh
+     3  Saurav Shekhar
+     3  chartl
+     3  fredcallaway
+     3  Demetri
+     2  Daisuke Kondo
+     2  David Brochart
+     2  George Ho
+     2  Vaibhav Sinha
+     1  rpgoldman
+     1  Adel Tomilova
+     1  Adriaan van der Graaf
+     1  Bas Nijholt
+     1  Benjamin Wild
+     1  Brigitta Sipocz
+     1  Daniel Emaasit
+     1  Hari
+     1  Jeroen
+     1  Joseph Willard
+     1  Juan Martin Loyola
+     1  Katrin Leinweber
+     1  Lisa Martin
+     1  M. Domenzain
+     1  Matt Pitkin
+     1  Peadar Coyle
+     1  Rupal Sharma
+     1  Tom Gilliss
+     1  changjiangeng
+     1  michaelosthege
+     1  monsta
+     1  579397
+
+## PyMC3 3.6 (Dec 21 2018)
+
+This will be the last release to support Python 2.
+
+### New features
+
+- Track the model log-likelihood as a sampler stat for NUTS and HMC samplers
+  (accessible as `trace.get_sampler_stats('model_logp')`) (#3134)
+- Add Incomplete Beta function `incomplete_beta(a, b, value)`
+- Add log CDF functions to continuous distributions: `Beta`, `Cauchy`, `ExGaussian`, `Exponential`, `Flat`, `Gumbel`, `HalfCauchy`, `HalfFlat`, `HalfNormal`, `Laplace`, `Logistic`, `Lognormal`, `Normal`, `Pareto`, `StudentT`, `Triangular`, `Uniform`, `Wald`, `Weibull`.
+- Behavior of `sample_posterior_predictive` is now to produce posterior predictive samples, in order, from all values of the `trace`. Previously, by default it would produce 1 chain worth of samples, using a random selection from the `trace` (#3212)
+- Show diagnostics for initial energy errors in HMC and NUTS.
+- PR #3273 has added the `distributions.distribution._DrawValuesContext` context
+  manager. This is used to store the values already drawn in nested `random`
+  and `draw_values` calls, enabling `draw_values` to draw samples from the
+  joint probability distribution of RVs and not the marginals. Custom
+  distributions that must call `draw_values` several times in their `random`
+  method, or that invoke many calls to other distribution's `random` methods
+  (e.g. mixtures) must do all of these calls under the same `_DrawValuesContext`
+  context manager instance. If they do not, the conditional relations between
+  the distribution's parameters could be broken, and `random` could return
+  values drawn from an incorrect distribution.
+- `Rice` distribution is now defined with either the noncentrality parameter or the shape parameter (#3287).
+
+### Maintenance
+
+- Big rewrite of documentation (#3275)
+- Fixed Triangular distribution `c` attribute handling in `random` and updated sample codes for consistency (#3225)
+- Refactor SMC and properly compute marginal likelihood (#3124)
+- Removed use of deprecated `ymin` keyword in matplotlib's `Axes.set_ylim` (#3279)
+- Fix for #3210. Now `distribution.draw_values(params)`, will draw the `params` values from their joint probability distribution and not from combinations of their marginals (Refer to PR #3273).
+- Removed dependence on pandas-datareader for retrieving Yahoo Finance data in examples (#3262)
+- Rewrote `Multinomial._random` method to better handle shape broadcasting (#3271)
+- Fixed `Rice` distribution, which inconsistently mixed two parametrizations (#3286).
+- `Rice` distribution now accepts multiple parameters and observations and is usable with NUTS (#3289).
+- `sample_posterior_predictive` no longer calls `draw_values` to initialize the shape of the ppc trace. This called could lead to `ValueError`'s when sampling the ppc from a model with `Flat` or `HalfFlat` prior distributions (Fix issue #3294).
+- Added explicit conversion to `floatX` and `int32` for the continuous and discrete probability distribution parameters (addresses issue #3223).
+
+
+### Deprecations
+
+- Renamed `sample_ppc()` and `sample_ppc_w()` to `sample_posterior_predictive()` and `sample_posterior_predictive_w()`, respectively.
+
+## PyMC 3.5 (July 21 2018)
+
+### New features
+
+- Add documentation section on survival analysis and censored data models
+- Add `check_test_point` method to `pm.Model`
+- Add `Ordered` Transformation and `OrderedLogistic` distribution
+- Add `Chain` transformation
+- Improve error message `Mass matrix contains zeros on the diagonal. Some derivatives might always be zero` during tuning of `pm.sample`
+- Improve error message `NaN occurred in optimization.` during ADVI
+- Save and load traces without `pickle` using `pm.save_trace` and `pm.load_trace`
+- Add `Kumaraswamy` distribution
+- Add `TruncatedNormal` distribution
+- Rewrite parallel sampling of multiple chains on py3. This resolves long standing issues when transferring large traces to the main process, avoids pickling issues on UNIX, and allows us to show a progress bar for all chains. If parallel sampling is interrupted, we now return partial results.
+- Add `sample_prior_predictive` which allows for efficient sampling from the unconditioned model.
+- SMC: remove experimental warning, allow sampling using `sample`, reduce autocorrelation from final trace.
+- Add `model_to_graphviz` (which uses the optional dependency `graphviz`) to plot a directed graph of a PyMC3 model using plate notation.
+- Add beta-ELBO variational inference as in beta-VAE model (Christopher P. Burgess et al. NIPS, 2017)
+- Add `__dir__` to `SingleGroupApproximation` to improve autocompletion in interactive environments
+
+### Fixes
+
+- Fixed grammar in divergence warning, previously `There were 1 divergences ...` could be raised.
+- Fixed `KeyError` raised when only subset of variables are specified to be recorded in the trace.
+- Removed unused `repeat=None` arguments from all `random()` methods in distributions.
+- Deprecated the `sigma` argument in `MarginalSparse.marginal_likelihood` in favor of `noise`
+- Fixed unexpected behavior in `random`. Now the `random` functionality is more robust and will work better for `sample_prior` when that is implemented.
+- Fixed `scale_cost_to_minibatch` behaviour, previously this was not working and always `False`
+
+## PyMC 3.4.1 (April 18 2018)
 
 ### New features
 
 - Add `logit_p` keyword to `pm.Bernoulli`, so that users can specify the logit of the success probability. This is faster and more stable than using `p=tt.nnet.sigmoid(logit_p)`.
 - Add `random` keyword to `pm.DensityDist` thus enabling users to pass custom random method which in turn makes sampling from a `DensityDist` possible.
 - Effective sample size computation is updated. The estimation uses Geyer's initial positive sequence, which no longer truncates the autocorrelation series inaccurately. `pm.diagnostics.effective_n` now can reports N_eff>N.
-- Added `KroneckerNormal` distribution and a corresponding `MarginalKron`
-  Gaussian Process implementation for efficient inference, along with
-  lower-level functions such as `cartesian` and `kronecker` products.
+- Added `KroneckerNormal` distribution and a corresponding `MarginalKron` Gaussian Process implementation for efficient inference, along with lower-level functions such as `cartesian` and `kronecker` products.
 - Added `Coregion` covariance function.
-- Add new 'pairplot' function, for plotting scatter or hexbin matrices of sampled parameters.
-  Optionally it can plot divergences.
+- Add new 'pairplot' function, for plotting scatter or hexbin matrices of sampled parameters. Optionally it can plot divergences.
 - Plots of discrete distributions in the docstrings
 - Add logitnormal distribution
 - Densityplot: add support for discrete variables
-- Fix the Binomial likelihood in `.glm.families.Binomial`, with the flexibility of specifying the `n`. 
+- Fix the Binomial likelihood in `.glm.families.Binomial`, with the flexibility of specifying the `n`.
 - Add `offset` kwarg to `.glm`.
+- Changed the `compare` function to accept a dictionary of model-trace pairs instead of two separate lists of models and traces.
+- add test and support for creating multivariate mixture and mixture of mixtures
+- `distribution.draw_values`, now is also able to draw values from conditionally dependent RVs, such as autotransformed RVs (Refer to PR #2902).
 
 ### Fixes
 
 - `VonMises` does not overflow for large values of kappa. i0 and i1 have been removed and we now use log_i0 to compute the logp.
 - The bandwidth for KDE plots is computed using a modified version of Scott's rule. The new version uses entropy instead of standard deviation. This works better for multimodal distributions. Functions using KDE plots has a new argument `bw` controlling the bandwidth.
 - fix PyMC3 variable is not replaced if provided in more_replacements (#2890)
+- Fix for issue #2900. For many situations, named node-inputs do not have a `random` method, while some intermediate node may have it. This meant that if the named node-input at the leaf of the graph did not have a fixed value, `theano` would try to compile it and fail to find inputs, raising a `theano.gof.fg.MissingInputError`. This was fixed by going through the theano variable's owner inputs graph, trying to get intermediate named-nodes values if the leafs had failed.
+- In `distribution.draw_values`, some named nodes could be `theano.tensor.TensorConstant`s or `theano.tensor.sharedvar.SharedVariable`s. Nevertheless, in `distribution._draw_value`, these would be passed to `distribution._compile_theano_function` as if they were `theano.tensor.TensorVariable`s. This could lead to the following exceptions `TypeError: ('Constants not allowed in param list', ...)` or `TypeError: Cannot use a shared variable (...)`. The fix was to not add `theano.tensor.TensorConstant` or `theano.tensor.sharedvar.SharedVariable` named nodes into the `givens` dict that could be used in `distribution._compile_theano_function`.
+- Exponential support changed to include zero values.
 
 ### Deprecations
 
@@ -48,7 +257,7 @@
 - Forestplot supports multiple traces (#2736)
 - Add new plot, densityplot (#2741)
 - DIC and BPIC calculations have been deprecated
-- Refactor HMC and implemented new warning system (#2677, #2808) 
+- Refactor HMC and implemented new warning system (#2677, #2808)
 
 ### Fixes
 
@@ -56,7 +265,7 @@
 - Improved `posteriorplot` to scale fonts
 - `sample_ppc_w` now broadcasts
 - `df_summary` function renamed to `summary`
-- Add test for `model.logp_array` and `model.bijection` (#2724) 
+- Add test for `model.logp_array` and `model.bijection` (#2724)
 - Fixed `sample_ppc` and `sample_ppc_w` to iterate all chains(#2633, #2748)
 - Add Bayesian R2 score (for GLMs) `stats.r2_score` (#2696) and test (#2729).
 - SMC works with transformed variables (#2755)

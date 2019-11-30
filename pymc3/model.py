@@ -2,13 +2,17 @@ import collections
 import functools
 import itertools
 import threading
-import six
+import warnings
+from typing import Optional, TypeVar, Type, List, Union, TYPE_CHECKING, Any, cast
+from sys import modules
 
 import numpy as np
+from pandas import Series
 import scipy.sparse as sps
 import theano.sparse as sparse
 from theano import theano, tensor as tt
 from theano.tensor.var import TensorVariable
+from theano.compile import SharedVariable
 
 from pymc3.theanof import set_theano_conf, floatX
 import pymc3 as pm
@@ -18,16 +22,27 @@ from .theanof import gradient, hessian, inputvars, generator
 from .vartypes import typefilter, discrete_types, continuous_types, isgenerator
 from .blocking import DictToArrayBijection, ArrayOrdering
 from .util import get_transformed_name
+from .exceptions import ImputationWarning
 
 __all__ = [
     'Model', 'Factor', 'compilef', 'fn', 'fastfn', 'modelcontext',
-    'Point', 'Deterministic', 'Potential'
+    'Point', 'Deterministic', 'Potential', 'set_data'
 ]
 
 FlatView = collections.namedtuple('FlatView', 'input, replacements, view')
 
 
-class InstanceMethod(object):
+class PyMC3Variable(TensorVariable):
+    """Class to wrap Theano TensorVariable for custom behavior."""
+
+    # Implement matrix multiplication infix operator: X @ w
+    __matmul__ = tt.dot
+
+    def __rmatmul__(self, other):
+        return tt.dot(other, self)
+
+
+class InstanceMethod:
     """Class for hiding references to instance methods so they can be pickled.
 
     >>> self.method = InstanceMethod(some_object, 'method_name')
@@ -41,10 +56,10 @@ class InstanceMethod(object):
         return getattr(self.obj, self.method_name)(*args, **kwargs)
 
 
-def incorporate_methods(source, destination, methods, default=None,
+def incorporate_methods(source, destination, methods,
                         wrapper=None, override=False):
     """
-    Add attributes to a destination object which points to
+    Add attributes to a destination object which point to
     methods from from a source object.
 
     Parameters
@@ -55,8 +70,6 @@ def incorporate_methods(source, destination, methods, default=None,
         The destination object for the methods.
     methods : list of str
         Names of methods to incorporate.
-    default : object
-        The value used if the source does not have one of the listed methods.
     wrapper : function
         An optional function to allow the source method to be
         wrapped. Should take the form my_wrapper(source, method_name)
@@ -78,82 +91,213 @@ def incorporate_methods(source, destination, methods, default=None,
         else:
             setattr(destination, method, None)
 
-
-def get_named_nodes(graph):
-    """Get the named nodes in a theano graph
-    (i.e., nodes whose name attribute is not None).
+def get_named_nodes_and_relations(graph):
+    """Get the named nodes in a theano graph (i.e., nodes whose name
+    attribute is not None) along with their relationships (i.e., the
+    node's named parents, and named children, while skipping unnamed
+    intermediate nodes)
 
     Parameters
     ----------
     graph - a theano node
 
     Returns:
-    A dictionary of name:node pairs.
+    leaf_nodes: A dictionary of name:node pairs, of the named nodes that
+        are also leafs of the graph
+    node_parents: A dictionary of node:set([parents]) pairs. Each key is
+        a theano named node, and the corresponding value is the set of
+        theano named nodes that are parents of the node. These parental
+        relations skip unnamed intermediate nodes.
+    node_children: A dictionary of node:set([children]) pairs. Each key
+        is a theano named node, and the corresponding value is the set
+        of theano named nodes that are children of the node. These child
+        relations skip unnamed intermediate nodes.
+
     """
-    return _get_named_nodes(graph, {})
-
-
-def _get_named_nodes(graph, nodes):
-    if graph.owner is None:
-        if graph.name is not None:
-            nodes.update({graph.name: graph})
+    if graph.name is not None:
+        node_parents = {graph: set()}
+        node_children = {graph: set()}
     else:
+        node_parents = {}
+        node_children = {}
+    return _get_named_nodes_and_relations(graph, None, {}, node_parents, node_children)
+
+def _get_named_nodes_and_relations(graph, parent, leaf_nodes,
+                                        node_parents, node_children):
+    if getattr(graph, 'owner', None) is None:  # Leaf node
+        if graph.name is not None:  # Named leaf node
+            leaf_nodes.update({graph.name: graph})
+            if parent is not None:  # Is None for the root node
+                try:
+                    node_parents[graph].add(parent)
+                except KeyError:
+                    node_parents[graph] = {parent}
+                node_children[parent].add(graph)
+            else:
+                node_parents[graph] = set()
+            # Flag that the leaf node has no children
+            node_children[graph] = set()
+    else:  # Intermediate node
+        if graph.name is not None:  # Intermediate named node
+            if parent is not None:  # Is only None for the root node
+                try:
+                    node_parents[graph].add(parent)
+                except KeyError:
+                    node_parents[graph] = {parent}
+                node_children[parent].add(graph)
+            else:
+                node_parents[graph] = set()
+            # The current node will be set as the parent of the next
+            # nodes only if it is a named node
+            parent = graph
+            # Init the nodes children to an empty set
+            node_children[graph] = set()
         for i in graph.owner.inputs:
-            nodes.update(_get_named_nodes(i, nodes))
-    return nodes
+            temp_nodes, temp_inter, temp_tree = \
+                _get_named_nodes_and_relations(i, parent, leaf_nodes,
+                                               node_parents, node_children)
+            leaf_nodes.update(temp_nodes)
+            node_parents.update(temp_inter)
+            node_children.update(temp_tree)
+    return leaf_nodes, node_parents, node_children
+
+T = TypeVar('T', bound='ContextMeta')
 
 
-class Context(object):
+class ContextMeta(type):
     """Functionality for objects that put themselves in a context using
     the `with` statement.
     """
-    contexts = threading.local()
 
-    def __enter__(self):
-        type(self).get_contexts().append(self)
-        # self._theano_config is set in Model.__new__
-        if hasattr(self, '_theano_config'):
-            self._old_theano_config = set_theano_conf(self._theano_config)
-        return self
+    def __new__(cls, name, bases, dct,  **kargs): # pylint: disable=unused-argument
+        "Add __enter__ and __exit__ methods to the class."
+        def __enter__(self):
+            self.__class__.context_class.get_contexts().append(self)
+            # self._theano_config is set in Model.__new__
+            if hasattr(self, '_theano_config'):
+                self._old_theano_config = set_theano_conf(self._theano_config)
+            return self
 
-    def __exit__(self, typ, value, traceback):
-        type(self).get_contexts().pop()
-        # self._theano_config is set in Model.__new__
-        if hasattr(self, '_old_theano_config'):
-            set_theano_conf(self._old_theano_config)
+        def __exit__(self, typ, value, traceback): # pylint: disable=unused-argument
+            self.__class__.context_class.get_contexts().pop()
+            # self._theano_config is set in Model.__new__
+            if hasattr(self, '_old_theano_config'):
+                set_theano_conf(self._old_theano_config)
 
-    @classmethod
-    def get_contexts(cls):
-        # no race-condition here, cls.contexts is a thread-local object
+        dct[__enter__.__name__] = __enter__
+        dct[__exit__.__name__] = __exit__
+
+        # We strip off keyword args, per the warning from
+        # StackExchange:
+        # DO NOT send "**kargs" to "type.__new__".  It won't catch them and
+        # you'll get a "TypeError: type() takes 1 or 3 arguments" exception.
+        return super().__new__(cls, name, bases, dct)
+
+    # FIXME: is there a more elegant way to automatically add methods to the class that
+    # are instance methods instead of class methods?
+    def __init__(cls, name, bases, nmspc, context_class: Optional[Type]=None, **kwargs): # pylint: disable=unused-argument
+        """Add ``__enter__`` and ``__exit__`` methods to the new class automatically."""
+        if context_class is not None:
+            cls._context_class = context_class
+        super().__init__(name, bases, nmspc)
+
+
+
+    def get_context(cls, error_if_none=True) -> Optional[T]:
+        """Return the most recently pushed context object of type ``cls``
+        on the stack, or ``None``. If ``error_if_none`` is True (default),
+        raise a ``TypeError`` instead of returning ``None``."""
+        idx = -1
+        while True:
+            try:
+                candidate = cls.get_contexts()[idx] # type: Optional[T]
+            except IndexError as e:
+                # Calling code expects to get a TypeError if the entity
+                # is unfound, and there's too much to fix.
+                if error_if_none:
+                    raise TypeError("No %s on context stack"%str(cls))
+                return None
+            return candidate
+            idx = idx - 1
+
+    def get_contexts(cls) -> List[T]:
+        """Return a stack of context instances for the ``context_class``
+        of ``cls``."""
+        # This lazily creates the context class's contexts
+        # thread-local object, as needed. This seems inelegant to me,
+        # but since the context class is not guaranteed to exist when
+        # the metaclass is being instantiated, I couldn't figure out a
+        # better way. [2019/10/11:rpg]
+
+        # no race-condition here, contexts is a thread-local object
         # be sure not to override contexts in a subclass however!
-        if not hasattr(cls.contexts, 'stack'):
-            cls.contexts.stack = []
-        return cls.contexts.stack
+        context_class = cls.context_class
+        assert isinstance(context_class, type), \
+            "Name of context class, %s was not resolvable to a class"%context_class
+        if not hasattr(context_class, 'contexts'):
+            context_class.contexts = threading.local()
 
-    @classmethod
-    def get_context(cls):
-        """Return the deepest context on the stack."""
-        try:
-            return cls.get_contexts()[-1]
-        except IndexError:
-            raise TypeError("No context on context stack")
+        contexts = context_class.contexts
+
+        if not hasattr(contexts, 'stack'):
+            contexts.stack = []
+        return contexts.stack
+
+    # the following complex property accessor is necessary because the
+    # context_class may not have been created at the point it is
+    # specified, so the context_class may be a class *name* rather
+    # than a class.
+    @property
+    def context_class(cls) -> Type:
+        def resolve_type(c: Union[Type, str]) -> Type:
+            if isinstance(c, str):
+                c = getattr(modules[cls.__module__], c)
+            if isinstance(c, type):
+                return c
+            raise ValueError("Cannot resolve context class %s"%c)
+        assert cls is not None
+        if isinstance(cls._context_class, str):
+            cls._context_class = resolve_type(cls._context_class)
+        if not isinstance(cls._context_class, (str, type)):
+            raise ValueError("Context class for %s, %s, is not of the right type"%\
+                             (cls.__name__, cls._context_class))
+        return cls._context_class
+
+    # Inherit context class from parent
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls.context_class = super().context_class
+
+    # Initialize object in its own context...
+    # Merged from InitContextMeta in the original.
+    def __call__(cls, *args, **kwargs):
+        instance = cls.__new__(cls, *args, **kwargs)
+        with instance:  # appends context
+            instance.__init__(*args, **kwargs)
+        return instance
 
 
-def modelcontext(model):
-    """return the given model or try to find it in the context if there was
-    none supplied.
+def modelcontext(model: Optional['Model']) -> 'Model':
+    """
+    Return the given model or, if none was supplied, try to find one in
+    the context stack.
     """
     if model is None:
-        return Model.get_context()
+        model = Model.get_context(error_if_none=False)
+
+        if model is None:
+            # TODO: This should be a ValueError, but that breaks
+            # ArviZ (and others?), so might need a deprecation.
+            raise TypeError("No model on context stack.")
     return model
 
 
-class Factor(object):
+class Factor:
     """Common functionality for objects with a log probability density
     associated with them.
     """
     def __init__(self, *args, **kwargs):
-        super(Factor, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     @property
     def logp(self):
@@ -232,15 +376,6 @@ class Factor(object):
         return logp
 
 
-class InitContextMeta(type):
-    """Metaclass that executes `__init__` of instance in it's context"""
-    def __call__(cls, *args, **kwargs):
-        instance = cls.__new__(cls, *args, **kwargs)
-        with instance:  # appends context
-            instance.__init__(*args, **kwargs)
-        return instance
-
-
 def withparent(meth):
     """Helper wrapper that passes calls to parent's instance"""
     def wrapped(self, *args, **kwargs):
@@ -261,7 +396,7 @@ class treelist(list):
     Extending treelist you will also extend its parent
     """
     def __init__(self, iterable=(), parent=None):
-        super(treelist, self).__init__(iterable)
+        super().__init__(iterable)
         assert isinstance(parent, list) or parent is None
         self.parent = parent
         if self.parent is not None:
@@ -286,11 +421,18 @@ class treelist(list):
                                   ' able to determine '
                                   'appropriate logic for it')
 
-    def __imul__(self, other):
+    # Added this because mypy didn't like having __imul__ without __mul__
+    # This is my best guess about what this should do.  I might be happier
+    # to kill both of these if they are not used.
+    def __mul__ (self, other) -> 'treelist':
+        return cast('treelist', list.__mul__(self, other))
+
+    def __imul__(self, other) -> 'treelist':
         t0 = len(self)
         list.__imul__(self, other)
         if self.parent is not None:
             self.parent.extend(self[t0:])
+        return self # python spec says should return the result.
 
 
 class treedict(dict):
@@ -299,7 +441,7 @@ class treedict(dict):
     Extending treedict you will also extend its parent
     """
     def __init__(self, iterable=(), parent=None, **kwargs):
-        super(treedict, self).__init__(iterable, **kwargs)
+        super().__init__(iterable, **kwargs)
         assert isinstance(parent, dict) or parent is None
         self.parent = parent
         if self.parent is not None:
@@ -320,7 +462,7 @@ class treedict(dict):
             return dict.__contains__(self, item)
 
 
-class ValueGradFunction(object):
+class ValueGradFunction:
     """Create a theano function that computes a value and its gradient.
 
     Parameters
@@ -354,6 +496,8 @@ class ValueGradFunction(object):
     """
     def __init__(self, cost, grad_vars, extra_vars=None, dtype=None,
                  casting='no', **kwargs):
+        from .distributions import TensorType
+
         if extra_vars is None:
             extra_vars = []
 
@@ -390,6 +534,12 @@ class ValueGradFunction(object):
         self._extra_vars_shared = {}
         for var in extra_vars:
             shared = theano.shared(var.tag.test_value, var.name + '_shared__')
+            # test TensorType compatibility
+            if hasattr(var.tag.test_value, 'shape'):
+                testtype = TensorType(var.dtype, var.tag.test_value.shape)
+
+                if testtype != shared.type:
+                    shared.type = testtype
             self._extra_vars_shared[var.name] = shared
             givens.append((var, shared))
 
@@ -436,7 +586,7 @@ class ValueGradFunction(object):
         if grad_out is None:
             return logp, dlogp
         else:
-            out[...] = dlogp
+            np.copyto(out, dlogp)
             return logp
 
     @property
@@ -487,7 +637,7 @@ class ValueGradFunction(object):
         return args_joined, theano.clone(cost, replace=replace)
 
 
-class Model(six.with_metaclass(InitContextMeta, Context, Factor, WithMemoization)):
+class Model(Factor, WithMemoization, metaclass=ContextMeta, context_class='Model'):
     """Encapsulates the variables and likelihood factors of a model.
 
     Model class can be used for creating class based models. To create
@@ -521,29 +671,29 @@ class Model(six.with_metaclass(InitContextMeta, Context, Factor, WithMemoization
 
         class CustomModel(Model):
             # 1) override init
-            def __init__(self, mean=0, sd=1, name='', model=None):
+            def __init__(self, mean=0, sigma=1, name='', model=None):
                 # 2) call super's init first, passing model and name
                 # to it name will be prefix for all variables here if
                 # no name specified for model there will be no prefix
-                super(CustomModel, self).__init__(name, model)
+                super().__init__(name, model)
                 # now you are in the context of instance,
                 # `modelcontext` will return self you can define
                 # variables in several ways note, that all variables
                 # will get model's name prefix
 
                 # 3) you can create variables with Var method
-                self.Var('v1', Normal.dist(mu=mean, sd=sd))
+                self.Var('v1', Normal.dist(mu=mean, sigma=sd))
                 # this will create variable named like '{prefix_}v1'
                 # and assign attribute 'v1' to instance created
                 # variable can be accessed with self.v1 or self['v1']
 
                 # 4) this syntax will also work as we are in the
                 # context of instance itself, names are given as usual
-                Normal('v2', mu=mean, sd=sd)
+                Normal('v2', mu=mean, sigma=sd)
 
                 # something more complex is allowed, too
                 half_cauchy = HalfCauchy('sd', beta=10, testval=1.)
-                Normal('v3', mu=mean, sd=half_cauchy)
+                Normal('v3', mu=mean, sigma=half_cauchy)
 
                 # Deterministic variables can be used in usual way
                 Deterministic('v3_sq', self.v3 ** 2)
@@ -563,7 +713,7 @@ class Model(six.with_metaclass(InitContextMeta, Context, Factor, WithMemoization
         # II:
         #   use new class as entering point in context
         with CustomModel() as model:
-            Normal('new_normal_var', mu=1, sd=0)
+            Normal('new_normal_var', mu=1, sigma=0)
 
         # III:
         #   just get model instance with all that was defined in it
@@ -575,15 +725,18 @@ class Model(six.with_metaclass(InitContextMeta, Context, Factor, WithMemoization
             CustomModel(mean=1, name='first')
             CustomModel(mean=2, name='second')
     """
+
+    if TYPE_CHECKING:
+        def __enter__(self: 'Model') -> 'Model': ...
+        def __exit__(self: 'Model', *exc: Any) -> bool: ...
+
     def __new__(cls, *args, **kwargs):
         # resolves the parent instance
-        instance = super(Model, cls).__new__(cls)
+        instance = super().__new__(cls)
         if kwargs.get('model') is not None:
             instance._parent = kwargs.get('model')
-        elif cls.get_contexts():
-            instance._parent = cls.get_contexts()[-1]
         else:
-            instance._parent = None
+            instance._parent = cls.get_context(error_if_none=False)
         theano_config = kwargs.get('theano_config', None)
         if theano_config is None or 'compute_test_value' not in theano_config:
             theano_config = {'compute_test_value': 'raise'}
@@ -626,10 +779,10 @@ class Model(six.with_metaclass(InitContextMeta, Context, Factor, WithMemoization
     def isroot(self):
         return self.parent is None
 
-    @property
+    @property # type: ignore -- mypy can't handle decorated types.
     @memoize(bound=True)
     def bijection(self):
-        vars = inputvars(self.cont_vars)
+        vars = inputvars(self.vars)
 
         bij = DictToArrayBijection(ArrayOrdering(vars),
                                    self.test_point)
@@ -669,10 +822,8 @@ class Model(six.with_metaclass(InitContextMeta, Context, Factor, WithMemoization
     def logpt(self):
         """Theano scalar of log-probability of the model"""
         with self:
-            factors = [var.logpt for var in self.basic_RVs]
-            logp_factors = tt.sum(factors)
-            logp_potentials = tt.sum([tt.sum(pot) for pot in self.potentials])
-            logp = logp_factors + logp_potentials
+            factors = [var.logpt for var in self.basic_RVs] + self.potentials
+            logp = tt.sum([tt.sum(factor) for factor in factors])
             if self.name:
                 logp.name = '__logp_%s' % self.name
             else:
@@ -681,7 +832,11 @@ class Model(six.with_metaclass(InitContextMeta, Context, Factor, WithMemoization
 
     @property
     def logp_nojact(self):
-        """Theano scalar of log-probability of the model"""
+        """Theano scalar of log-probability of the model but without the jacobian
+        if transformed Random Variable is presented.
+        Note that If there is no transformed variable in the model, logp_nojact
+        will be the same as logpt as there is no need for Jacobian correction.
+        """
         with self:
             factors = [var.logp_nojact for var in self.basic_RVs] + self.potentials
             logp = tt.sum([tt.sum(factor) for factor in factors])
@@ -696,7 +851,14 @@ class Model(six.with_metaclass(InitContextMeta, Context, Factor, WithMemoization
         """Theano scalar of log-probability of the unobserved random variables
            (excluding deterministic)."""
         with self:
-            factors = [var.logpt for var in self.vars]
+            factors = [var.logpt for var in self.free_RVs]
+            return tt.sum(factors)
+
+    @property
+    def datalogpt(self):
+        with self:
+            factors = [var.logpt for var in self.observed_RVs]
+            factors += [tt.sum(factor) for factor in self.potentials]
             return tt.sum(factors)
 
     @property
@@ -958,6 +1120,27 @@ class Model(six.with_metaclass(InitContextMeta, Context, Factor, WithMemoization
         flat_view = FlatView(inputvar, replacements, view)
         return flat_view
 
+    def check_test_point(self, test_point=None, round_vals=2):
+        """Checks log probability of test_point for all random variables in the model.
+
+        Parameters
+        ----------
+        test_point : Point
+            Point to be evaluated.
+            if None, then all model.test_point is used
+        round_vals : int
+            Number of decimals to round log-probabilities
+
+        Returns
+        -------
+        Pandas Series
+        """
+        if test_point is None:
+            test_point = self.test_point
+
+        return Series({RV.name:np.round(RV.logp(self.test_point), round_vals) for RV in self.basic_RVs},
+            name='Log-probability of test_point')
+
     def _repr_latex_(self, name=None, dist=None):
         tex_vars = []
         for rv in itertools.chain(self.unobserved_RVs, self.observed_RVs):
@@ -972,6 +1155,54 @@ class Model(six.with_metaclass(InitContextMeta, Context, Factor, WithMemoization
             $$'''.format('\\\\'.join(tex_vars))
 
     __latex__ = _repr_latex_
+
+
+def set_data(new_data, model=None):
+    """Sets the value of one or more data container variables.
+
+    Parameters
+    ----------
+    new_data : dict
+        New values for the data containers. The keys of the dictionary are
+        the  variables names in the model and the values are the objects
+        with which to update.
+    model : Model (optional if in `with` context)
+
+    Examples
+    --------
+
+    .. code:: ipython
+
+        >>> import pymc3 as pm
+        >>> with pm.Model() as model:
+        ...     x = pm.Data('x', [1., 2., 3.])
+        ...     y = pm.Data('y', [1., 2., 3.])
+        ...     beta = pm.Normal('beta', 0, 1)
+        ...     obs = pm.Normal('obs', x * beta, 1, observed=y)
+        ...     trace = pm.sample(1000, tune=1000)
+
+    Set the value of `x` to predict on new data.
+
+    .. code:: ipython
+
+        >>> with model:
+        ...     pm.set_data({'x': [5,6,9]})
+        ...     y_test = pm.sample_posterior_predictive(trace)
+        >>> y_test['obs'].mean(axis=0)
+        array([4.6088569 , 5.54128318, 8.32953844])
+    """
+    model = modelcontext(model)
+
+    for variable_name, new_value in new_data.items():
+        if isinstance(model[variable_name], SharedVariable):
+            model[variable_name].set_value(pandas_to_array(new_value))
+        else:
+            message = 'The variable `{}` must be defined as `pymc3.' \
+                      'Data` inside the model to allow updating. The ' \
+                      'current type is: ' \
+                      '{}.'.format(variable_name,
+                                   type(model[variable_name]))
+            raise TypeError(message)
 
 
 def fn(outs, mode=None, model=None, *args, **kwargs):
@@ -1028,7 +1259,7 @@ def Point(*args, **kwargs):
                 if str(k) in map(str, model.vars))
 
 
-class FastPointFunc(object):
+class FastPointFunc:
     """Wraps so a function so it takes a dict of arguments instead of arguments."""
 
     def __init__(self, f):
@@ -1038,7 +1269,7 @@ class FastPointFunc(object):
         return self.f(**state)
 
 
-class LoosePointFunc(object):
+class LoosePointFunc:
     """Wraps so a function so it takes a dict of arguments instead of arguments
     but can still take arguments."""
 
@@ -1110,7 +1341,7 @@ def _get_scaling(total_size, shape, ndim):
     return tt.as_tensor(floatX(coef))
 
 
-class FreeRV(Factor, TensorVariable):
+class FreeRV(Factor, PyMC3Variable):
     """Unobserved random variable that a model is specified in terms of."""
 
     def __init__(self, type=None, owner=None, index=None, name=None,
@@ -1128,7 +1359,7 @@ class FreeRV(Factor, TensorVariable):
         """
         if type is None:
             type = distribution.type
-        super(FreeRV, self).__init__(type, owner, index, name)
+        super().__init__(type, owner, index, name)
 
         if distribution is not None:
             self.dshape = tuple(distribution.shape)
@@ -1173,7 +1404,10 @@ def pandas_to_array(data):
         else:
             ret = data.values
     elif hasattr(data, 'mask'):
-        ret = data
+        if data.mask.any():
+            ret = data
+        else:  # empty mask
+            ret = data.filled()
     elif isinstance(data, theano.gof.graph.Variable):
         ret = data
     elif sps.issparse(data):
@@ -1182,7 +1416,7 @@ def pandas_to_array(data):
         ret = generator(data)
     else:
         ret = np.asarray(data)
-    return pm.smartfloatX(ret)
+    return pm.floatX(ret)
 
 
 def as_tensor(data, name, model, distribution):
@@ -1190,6 +1424,10 @@ def as_tensor(data, name, model, distribution):
     data = pandas_to_array(data).astype(dtype)
 
     if hasattr(data, 'mask'):
+        impute_message = ('Data in {name} contains missing values and'
+                          ' will be automatically imputed from the'
+                          ' sampling distribution.'.format(name=name))
+        warnings.warn(impute_message, ImputationWarning)
         from .distributions import NoDistribution
         testval = np.broadcast_to(distribution.default(), data.shape)[data.mask]
         fakedist = NoDistribution.dist(shape=data.mask.sum(), dtype=dtype,
@@ -1212,7 +1450,7 @@ def as_tensor(data, name, model, distribution):
         return data
 
 
-class ObservedRV(Factor, TensorVariable):
+class ObservedRV(Factor, PyMC3Variable):
     """Observed random variable that a model is specified in terms of.
     Potentially partially observed.
     """
@@ -1231,13 +1469,17 @@ class ObservedRV(Factor, TensorVariable):
             needed for upscaling logp
         """
         from .distributions import TensorType
+
+        if hasattr(data, 'type') and isinstance(data.type, tt.TensorType):
+            type = data.type
+
         if type is None:
             data = pandas_to_array(data)
             type = TensorType(distribution.dtype, data.shape)
 
         self.observations = data
 
-        super(ObservedRV, self).__init__(type, owner, index, name)
+        super().__init__(type, owner, index, name)
 
         if distribution is not None:
             data = as_tensor(data, name, model, distribution)
@@ -1308,6 +1550,16 @@ class MultiObservedRV(Factor):
         self.distribution = distribution
         self.scaling = _get_scaling(total_size, self.logp_elemwiset.shape, self.logp_elemwiset.ndim)
 
+    # Make hashable by id for draw_values
+    def __hash__(self):
+        return id(self)
+
+    def __eq__(self, other):
+        return self.id == other.id
+
+    def __ne__(self, other):
+        return not self == other
+
 
 def _walk_up_rv(rv):
     """Walk up theano graph to get inputs for deterministic RV."""
@@ -1342,7 +1594,7 @@ def Deterministic(name, var, model=None):
     var : var, with name attribute
     """
     model = modelcontext(model)
-    var.name = model.name_for(name)
+    var = var.copy(model.name_for(name))
     model.deterministics.append(var)
     model.add_random_variable(var)
     var._repr_latex_ = functools.partial(_latex_repr_rv, var)
@@ -1369,7 +1621,7 @@ def Potential(name, var, model=None):
     return var
 
 
-class TransformedRV(TensorVariable):
+class TransformedRV(PyMC3Variable):
     """
     Parameters
     ----------
@@ -1388,13 +1640,15 @@ class TransformedRV(TensorVariable):
                  total_size=None):
         if type is None:
             type = distribution.type
-        super(TransformedRV, self).__init__(type, owner, index, name)
+        super().__init__(type, owner, index, name)
 
         self.transformation = transform
 
         if distribution is not None:
             self.model = model
             self.distribution = distribution
+            self.dshape = tuple(distribution.shape)
+            self.dsize = int(np.prod(distribution.shape))
 
             transformed_name = get_transformed_name(name, transform)
 

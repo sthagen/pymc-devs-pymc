@@ -1,5 +1,3 @@
-from __future__ import division
-
 import logging
 import warnings
 import collections
@@ -22,6 +20,7 @@ __all__ = [
     'FullRankADVI',
     'SVGD',
     'ASVGD',
+    'NFVI',
     'Inference',
     'ImplicitGradient',
     'KLqp',
@@ -31,7 +30,7 @@ __all__ = [
 State = collections.namedtuple('State', 'i,step,callbacks,score')
 
 
-class Inference(object):
+class Inference:
     R"""**Base class for Variational Inference**
 
     Communicates Operator, Approximation and Test Function to build Objective Function
@@ -147,8 +146,27 @@ class Inference(object):
         try:
             for i in progress:
                 step_func()
-                if np.isnan(self.approx.params[0].get_value()).any():
-                    raise FloatingPointError('NaN occurred in optimization.')
+                current_param = self.approx.params[0].get_value()
+                if np.isnan(current_param).any():
+                    name_slc = []
+                    tmp_hold = list(range(current_param.size))
+                    vmap = self.approx.groups[0].bij.ordering.vmap
+                    for vmap_ in vmap:
+                        slclen = len(tmp_hold[vmap_.slc])
+                        for i in range(slclen):
+                            name_slc.append((vmap_.var, i))
+                    index = np.where(np.isnan(current_param))[0]
+                    errmsg = ['NaN occurred in optimization. ']
+                    suggest_solution = 'Try tracking this parameter: ' \
+                                       'http://docs.pymc.io/notebooks/variational_api_quickstart.html#Tracking-parameters'
+                    try:
+                        for ii in index:
+                            errmsg.append('The current approximation of RV `{}`.ravel()[{}]'
+                                          ' is NaN.'.format(*name_slc[ii]))
+                        errmsg.append(suggest_solution)
+                    except IndexError:
+                        pass
+                    raise FloatingPointError('\n'.join(errmsg))
                 for callback in callbacks:
                     callback(self.approx, None, i+s+1)
         except (KeyboardInterrupt, StopIteration) as e:
@@ -178,7 +196,26 @@ class Inference(object):
                 if np.isnan(e):  # pragma: no cover
                     scores = scores[:i]
                     self.hist = np.concatenate([self.hist, scores])
-                    raise FloatingPointError('NaN occurred in optimization.')
+                    current_param = self.approx.params[0].get_value()
+                    name_slc = []
+                    tmp_hold = list(range(current_param.size))
+                    vmap = self.approx.groups[0].bij.ordering.vmap
+                    for vmap_ in vmap:
+                        slclen = len(tmp_hold[vmap_.slc])
+                        for i in range(slclen):
+                            name_slc.append((vmap_.var, i))
+                    index = np.where(np.isnan(current_param))[0]
+                    errmsg = ['NaN occurred in optimization. ']
+                    suggest_solution = 'Try tracking this parameter: ' \
+                                       'http://docs.pymc.io/notebooks/variational_api_quickstart.html#Tracking-parameters'
+                    try:
+                        for ii in index:
+                            errmsg.append('The current approximation of RV `{}`.ravel()[{}]'
+                                          ' is NaN.'.format(*name_slc[ii]))
+                        errmsg.append(suggest_solution)
+                    except IndexError:
+                        pass
+                    raise FloatingPointError('\n'.join(errmsg))
                 scores[i] = e
                 if i % 10 == 0:
                     avg_loss = _infmean(scores[max(0, i - 1000):i + 1])
@@ -234,15 +271,28 @@ class KLqp(Inference):
     """**Kullback Leibler Divergence Inference**
 
     General approach to fit Approximations that define :math:`logq`
-    by maximizing ELBO (Evidence Lower Bound).
+    by maximizing ELBO (Evidence Lower Bound). In some cases
+    rescaling the regularization term KL may be beneficial
+
+    .. math::
+
+        ELBO_\beta = \log p(D|\theta) - \beta KL(q||p)
 
     Parameters
     ----------
     approx : :class:`Approximation`
         Approximation to fit, it is required to have `logQ`
+    beta : float
+        Scales the regularization term in ELBO (see Christopher P. Burgess et al., 2017)
+
+    References
+    ----------
+    -   Christopher P. Burgess et al. (NIPS, 2017)
+        Understanding disentangling in :math:`\beta`-VAE
+        arXiv preprint 1804.03599
     """
-    def __init__(self, approx):
-        super(KLqp, self).__init__(KL, approx, None)
+    def __init__(self, approx, beta=1.):
+        super().__init__(KL, approx, None, beta=beta)
 
 
 class ADVI(KLqp):
@@ -390,7 +440,7 @@ class ADVI(KLqp):
     """
 
     def __init__(self, *args, **kwargs):
-        super(ADVI, self).__init__(MeanField(*args, **kwargs))
+        super().__init__(MeanField(*args, **kwargs))
 
 
 class FullRankADVI(KLqp):
@@ -425,7 +475,7 @@ class FullRankADVI(KLqp):
     """
 
     def __init__(self, *args, **kwargs):
-        super(FullRankADVI, self).__init__(FullRank(*args, **kwargs))
+        super().__init__(FullRank(*args, **kwargs))
 
 
 class ImplicitGradient(Inference):
@@ -440,12 +490,7 @@ class ImplicitGradient(Inference):
     samples but there is no theoretical approach to choose the best one in such case.
     """
     def __init__(self, approx, estimator=KSD, kernel=test_functions.rbf, **kwargs):
-        super(ImplicitGradient, self).__init__(
-            op=estimator,
-            approx=approx,
-            tf=kernel,
-            **kwargs
-        )
+        super().__init__(op=estimator, approx=approx, tf=kernel, **kwargs)
 
 
 class SVGD(ImplicitGradient):
@@ -506,12 +551,7 @@ class SVGD(ImplicitGradient):
         empirical = Empirical(
             size=n_particles, jitter=jitter,
             start=start, model=model, random_seed=random_seed)
-        super(SVGD, self).__init__(
-            approx=empirical,
-            estimator=estimator,
-            kernel=kernel,
-            **kwargs
-        )
+        super().__init__(approx=empirical, estimator=estimator, kernel=kernel, **kwargs)
 
 
 class ASVGD(ImplicitGradient):
@@ -572,22 +612,16 @@ class ASVGD(ImplicitGradient):
                 model=kwargs.pop('model', None),
                 local_rv=kwargs.pop('local_rv', None)
             )
-        super(ASVGD, self).__init__(
-            estimator=estimator,
-            approx=approx,
-            kernel=kernel,
-            **kwargs
-        )
+        super().__init__(estimator=estimator, approx=approx, kernel=kernel, **kwargs)
 
     def fit(self, n=10000, score=None, callbacks=None, progressbar=True,
             obj_n_mc=500, **kwargs):
-        return super(ASVGD, self).fit(
+        return super().fit(
             n=n, score=score, callbacks=callbacks,
             progressbar=progressbar, obj_n_mc=obj_n_mc, **kwargs)
 
     def run_profiling(self, n=1000, score=None, obj_n_mc=500, **kwargs):
-        return super(ASVGD, self).run_profiling(
-            n=n, score=score, obj_n_mc=obj_n_mc, **kwargs)
+        return super().run_profiling(n=n, score=score, obj_n_mc=obj_n_mc, **kwargs)
 
 
 class NFVI(KLqp):
@@ -642,7 +676,7 @@ class NFVI(KLqp):
     """
 
     def __init__(self, *args, **kwargs):
-        super(NFVI, self).__init__(NormalizingFlow(*args, **kwargs))
+        super().__init__(NormalizingFlow(*args, **kwargs))
 
 
 def fit(n=10000, local_rv=None, method='advi', model=None,

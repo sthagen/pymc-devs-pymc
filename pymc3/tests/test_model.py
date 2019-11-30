@@ -13,11 +13,11 @@ from pymc3.model import ValueGradFunction
 
 class NewModel(pm.Model):
     def __init__(self, name='', model=None):
-        super(NewModel, self).__init__(name, model)
+        super().__init__(name, model)
         assert pm.modelcontext(None) is self
         # 1) init variables with Var method
         self.Var('v1', pm.Normal.dist())
-        self.v2 = pm.Normal('v2', mu=0, sd=1)
+        self.v2 = pm.Normal('v2', mu=0, sigma=1)
         # 2) Potentials and Deterministic variables with method too
         # be sure that names will not overlap with other same models
         pm.Deterministic('d', tt.constant(1))
@@ -25,16 +25,16 @@ class NewModel(pm.Model):
 
 
 class DocstringModel(pm.Model):
-    def __init__(self, mean=0, sd=1, name='', model=None):
-        super(DocstringModel, self).__init__(name, model)
-        self.Var('v1', Normal.dist(mu=mean, sd=sd))
-        Normal('v2', mu=mean, sd=sd)
-        Normal('v3', mu=mean, sd=HalfCauchy('sd', beta=10, testval=1.))
+    def __init__(self, mean=0, sigma=1, name='', model=None):
+        super().__init__(name, model)
+        self.Var('v1', Normal.dist(mu=mean, sigma=sigma))
+        Normal('v2', mu=mean, sigma=sigma)
+        Normal('v3', mu=mean, sigma=HalfCauchy('sd', beta=10, testval=1.))
         Deterministic('v3_sq', self.v3 ** 2)
         Potential('p1', tt.constant(1))
 
 
-class TestBaseModel(object):
+class TestBaseModel:
     def test_setattr_properly_works(self):
         with pm.Model() as model:
             pm.Normal('v1')
@@ -52,10 +52,15 @@ class TestBaseModel(object):
 
     def test_context_passes_vars_to_parent_model(self):
         with pm.Model() as model:
+            assert pm.model.modelcontext(None) == model
+            assert pm.Model.get_context() == model
             # a set of variables is created
-            NewModel()
+            nm = NewModel()
+            assert pm.Model.get_context() == model
             # another set of variables are created but with prefix 'another'
             usermodel2 = NewModel(name='another')
+            assert pm.Model.get_context() == model
+            assert usermodel2._parent == model
             # you can enter in a context with submodel
             with usermodel2:
                 usermodel2.Var('v3', pm.Normal.dist())
@@ -77,7 +82,7 @@ class TestBaseModel(object):
         assert m['one_more_d'] is model['one_more_d']
 
 
-class TestNested(object):
+class TestNested:
     def test_nest_context_works(self):
         with pm.Model() as m:
             new = NewModel()
@@ -123,15 +128,25 @@ class TestNested(object):
                 assert model is sub.root
 
 
-class TestObserved(object):
+class TestObserved:
     def test_observed_rv_fail(self):
         with pytest.raises(TypeError):
             with pm.Model():
                 x = Normal('x')
                 Normal('n', observed=x)
 
+    def test_observed_type(self):
+        X_ = np.random.randn(100, 5)
+        X = pm.floatX(theano.shared(X_))
+        with pm.Model():
+            x1 = pm.Normal('x1', observed=X_)
+            x2 = pm.Normal('x2', observed=X)
 
-class TestTheanoConfig(object):
+        assert x1.type == X.type
+        assert x2.type == X.type
+
+
+class TestTheanoConfig:
     def test_set_testval_raise(self):
         with theano.configparser.change_flags(compute_test_value='off'):
             with pm.Model():
@@ -146,6 +161,34 @@ class TestTheanoConfig(object):
                     assert theano.config.compute_test_value == 'warn'
                 assert theano.config.compute_test_value == 'ignore'
             assert theano.config.compute_test_value == 'off'
+
+def test_matrix_multiplication():
+    # Check matrix multiplication works between RVs, transformed RVs,
+    # Deterministics, and numpy arrays
+    with pm.Model() as linear_model:
+        matrix = pm.Normal('matrix', shape=(2, 2))
+        transformed = pm.Gamma('transformed', alpha=2, beta=1, shape=2)
+        rv_rv = pm.Deterministic('rv_rv', matrix @ transformed)
+        np_rv = pm.Deterministic('np_rv', np.ones((2, 2)) @ transformed)
+        rv_np = pm.Deterministic('rv_np', matrix @ np.ones(2))
+        rv_det = pm.Deterministic('rv_det', matrix @ rv_rv)
+        det_rv = pm.Deterministic('det_rv', rv_rv @ transformed)
+
+        posterior = pm.sample(10,
+                              tune=0,
+                              compute_convergence_checks=False,
+                              progressbar=False)
+        for point in posterior.points():
+            npt.assert_almost_equal(point['matrix'] @ point['transformed'],
+                                    point['rv_rv'])
+            npt.assert_almost_equal(np.ones((2, 2)) @ point['transformed'],
+                                    point['np_rv'])
+            npt.assert_almost_equal(point['matrix'] @ np.ones(2),
+                                    point['rv_np'])
+            npt.assert_almost_equal(point['matrix'] @ point['rv_rv'],
+                                    point['rv_det'])
+            npt.assert_almost_equal(point['rv_rv'] @ point['transformed'],
+                                    point['det_rv'])
 
 
 def test_duplicate_vars():
@@ -259,3 +302,35 @@ class TestValueGradFunction(unittest.TestCase):
         point_ = self.f_grad.array_to_full_dict(array)
         assert len(point_) == 3
         assert point_['extra1'] == 5
+
+    def test_edge_case(self):
+        # Edge case discovered in #2948
+        ndim = 3
+        with pm.Model() as m:
+            pm.Lognormal('sigma',
+                         mu=np.zeros(ndim),
+                         tau=np.ones(ndim),
+                         shape=ndim)  # variance for the correlation matrix
+            pm.HalfCauchy('nu', beta=10)
+            step = pm.NUTS()
+
+        func = step._logp_dlogp_func
+        func.set_extra_values(m.test_point)
+        q = func.dict_to_array(m.test_point)
+        logp, dlogp = func(q)
+        assert logp.size == 1
+        assert dlogp.size == 4
+        npt.assert_allclose(dlogp, 0., atol=1e-5)
+
+    def test_tensor_type_conversion(self):
+        # case described in #3122
+        X = np.random.binomial(1, 0.5, 10)
+        X[0] = -1  # masked a single value
+        X = np.ma.masked_values(X, value=-1)
+        with pm.Model() as m:
+            x1 = pm.Uniform('x1', 0., 1.)
+            x2 = pm.Bernoulli('x2', x1, observed=X)
+
+        gf = m.logp_dlogp_function()
+
+        assert m['x2_missing'].type == gf._extra_vars_shared['x2_missing'].type

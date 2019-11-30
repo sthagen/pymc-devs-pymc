@@ -1,4 +1,5 @@
 import time
+import timeit
 
 import numpy as np
 import pandas as pd
@@ -57,12 +58,13 @@ def mixture_model(random_seed=1234):
     return model, start
 
 
-class OverheadSuite(object):
+class OverheadSuite:
     """
     Just tests how long sampling from a normal distribution takes for various
     samplers
     """
     params = [pm.NUTS, pm.HamiltonianMC, pm.Metropolis, pm.Slice]
+    timer = timeit.default_timer
 
     def setup(self, step):
         self.n_steps = 10000
@@ -75,9 +77,10 @@ class OverheadSuite(object):
                       progressbar=False, compute_convergence_checks=False)
 
 
-class ExampleSuite(object):
+class ExampleSuite:
     """Implements examples to keep up with benchmarking them."""
     timeout = 360.0  # give it a few minutes
+    timer = timeit.default_timer
 
     def time_drug_evaluation(self):
         drug = np.array([101, 100, 102, 104, 102, 97, 105, 105, 98, 101,
@@ -125,7 +128,7 @@ class ExampleSuite(object):
                       progressbar=False, compute_convergence_checks=False)
 
 
-class NUTSInitSuite(object):
+class NUTSInitSuite:
     """Tests initializations for NUTS sampler on models
     """
     timeout = 360.0
@@ -148,7 +151,7 @@ class NUTSInitSuite(object):
                               start=start, random_seed=100, progressbar=False,
                               compute_convergence_checks=False)
             tot = time.time() - t0
-        ess = pm.effective_n(trace, ('mu_a',))['mu_a']
+        ess = float(pm.ess(trace, var_names=['mu_a'])['mu_a'].values)
         return ess / tot
 
     def track_marginal_mixture_model_ess(self, init):
@@ -162,7 +165,7 @@ class NUTSInitSuite(object):
                               start=start, random_seed=100, progressbar=False,
                               compute_convergence_checks=False)
             tot = time.time() - t0
-        ess = pm.effective_n(trace, ('mu',))['mu'].min()  # worst case
+        ess = pm.ess(trace, var_names=['mu'])['mu'].values.min()  # worst case
         return ess / tot
 
 
@@ -170,7 +173,7 @@ NUTSInitSuite.track_glm_hierarchical_ess.unit = 'Effective samples per second'
 NUTSInitSuite.track_marginal_mixture_model_ess.unit = 'Effective samples per second'
 
 
-class CompareMetropolisNUTSSuite(object):
+class CompareMetropolisNUTSSuite:
     timeout = 360.0
     # None will be the "sensible default", and include initialization, but should be fastest
     params = (None, pm.NUTS, pm.Metropolis)
@@ -187,7 +190,7 @@ class CompareMetropolisNUTSSuite(object):
                               random_seed=100, progressbar=False,
                               compute_convergence_checks=False)
             tot = time.time() - t0
-        ess = pm.effective_n(trace, ('mu_a',))['mu_a']
+        ess = float(pm.ess(trace, var_names=['mu_a'])['mu_a'].values)
         return ess / tot
 
 

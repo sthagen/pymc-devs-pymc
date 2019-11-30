@@ -63,7 +63,7 @@ def partial_check_positive_definite(C):
 
 class PositiveDefiniteError(ValueError):
     def __init__(self, msg, idx):
-        super(PositiveDefiniteError, self).__init__(msg)
+        super().__init__(msg)
         self.idx = idx
         self.msg = msg
 
@@ -72,7 +72,7 @@ class PositiveDefiniteError(ValueError):
                 % (self.msg, self.idx))
 
 
-class QuadPotential(object):
+class QuadPotential:
     def velocity(self, x, out=None):
         """Compute the current velocity at a position in parameter space."""
         raise NotImplementedError('Abstract method')
@@ -94,8 +94,23 @@ class QuadPotential(object):
         """
         pass
 
-    def raise_ok(self):
-        pass
+    def raise_ok(self, vmap=None):
+        """Check if the mass matrix is ok, and raise ValueError if not.
+
+        Parameters
+        ----------
+        vmap : blocking.ArrayOrdering.vmap
+            List of `VarMap`s, which are namedtuples with var, slc, shp, dtyp
+
+        Raises
+        ------
+        ValueError if any standard deviations are 0 or infinite
+
+        Returns
+        -------
+        None
+        """
+        return None
 
     def reset(self):
         pass
@@ -185,15 +200,49 @@ class QuadPotentialDiagAdapt(QuadPotential):
 
         self._n_samples += 1
 
-    def raise_ok(self):
+    def raise_ok(self, vmap):
+        """Check if the mass matrix is ok, and raise ValueError if not.
+
+        Parameters
+        ----------
+        vmap : blocking.ArrayOrdering.vmap
+            List of `VarMap`s, which are namedtuples with var, slc, shp, dtyp
+
+        Raises
+        ------
+        ValueError if any standard deviations are 0 or infinite
+
+        Returns
+        -------
+        None
+        """
         if np.any(self._stds == 0):
-            raise ValueError('Mass matrix contains zeros on the diagonal. '
-                             'Some derivatives might always be zero.')
-        if np.any(self._stds < 0):
-            raise ValueError('Mass matrix contains negative values on the '
-                             'diagonal.')
+            name_slc = []
+            tmp_hold = list(range(self._stds.size))
+            for vmap_ in vmap:
+                slclen = len(tmp_hold[vmap_.slc])
+                for i in range(slclen):
+                    name_slc.append((vmap_.var, i))
+            index = np.where(self._stds == 0)[0]
+            errmsg = ['Mass matrix contains zeros on the diagonal. ']
+            for ii in index:
+                errmsg.append('The derivative of RV `{}`.ravel()[{}]'
+                              ' is zero.'.format(*name_slc[ii]))
+            raise ValueError('\n'.join(errmsg))
+
         if np.any(~np.isfinite(self._stds)):
-            raise ValueError('Mass matrix contains non-finite values.')
+            name_slc = []
+            tmp_hold = list(range(self._stds.size))
+            for vmap_ in vmap:
+                slclen = len(tmp_hold[vmap_.slc])
+                for i in range(slclen):
+                    name_slc.append((vmap_.var, i))
+            index = np.where(~np.isfinite(self._stds))[0]
+            errmsg = ['Mass matrix contains non-finite values on the diagonal. ']
+            for ii in index:
+                errmsg.append('The derivative of RV `{}`.ravel()[{}]'
+                              ' is non-finite.'.format(*name_slc[ii]))
+            raise ValueError('\n'.join(errmsg))
 
 
 class QuadPotentialDiagAdaptGrad(QuadPotentialDiagAdapt):
@@ -203,7 +252,7 @@ class QuadPotentialDiagAdaptGrad(QuadPotentialDiagAdapt):
     """
 
     def __init__(self, *args, **kwargs):
-        super(QuadPotentialDiagAdaptGrad, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self._grads1 = np.zeros(self._n, dtype=self.dtype)
         self._ngrads1 = 0
         self._grads2 = np.zeros(self._n, dtype=self.dtype)
@@ -237,14 +286,13 @@ class QuadPotentialDiagAdaptGrad(QuadPotentialDiagAdapt):
             self._grads2[:] = 1
 
 
-class _WeightedVariance(object):
+class _WeightedVariance:
     """Online algorithm for computing mean of variance."""
 
     def __init__(self, nelem, initial_mean=None, initial_variance=None,
                  initial_weight=0, dtype='d'):
         self._dtype = dtype
-        self.w_sum = float(initial_weight)
-        self.w_sum2 = float(initial_weight) ** 2
+        self.n_samples = float(initial_weight)
         if initial_mean is None:
             self.mean = np.zeros(nelem, dtype='d')
         else:
@@ -254,7 +302,7 @@ class _WeightedVariance(object):
         else:
             self.raw_var = np.array(initial_variance, dtype='d', copy=True)
 
-        self.raw_var[:] *= self.w_sum
+        self.raw_var[:] *= self.n_samples
 
         if self.raw_var.shape != (nelem,):
             raise ValueError('Invalid shape for initial variance.')
@@ -263,21 +311,19 @@ class _WeightedVariance(object):
 
     def add_sample(self, x, weight):
         x = np.asarray(x)
-        self.w_sum += weight
-        self.w_sum2 += weight * weight
-        prop = weight / self.w_sum
+        self.n_samples += 1
         old_diff = x - self.mean
-        self.mean[:] += prop * old_diff
+        self.mean[:] += old_diff / self.n_samples
         new_diff = x - self.mean
-        self.raw_var[:] += weight * old_diff * new_diff
+        self.raw_var[:] +=  weight * old_diff * new_diff
 
     def current_variance(self, out=None):
-        if self.w_sum == 0:
+        if self.n_samples == 0:
             raise ValueError('Can not compute variance without samples.')
         if out is not None:
-            return np.divide(self.raw_var, self.w_sum, out=out)
+            return np.divide(self.raw_var, self.n_samples, out=out)
         else:
-            return (self.raw_var / self.w_sum).astype(self._dtype)
+            return (self.raw_var / self.n_samples).astype(self._dtype)
 
     def current_mean(self):
         return self.mean.copy(dtype=self._dtype)

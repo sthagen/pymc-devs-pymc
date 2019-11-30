@@ -5,12 +5,12 @@ import pytest
 import theano
 
 
-class TestTextSampling(object):
+class TestTextSampling:
     name = 'text-db'
 
     def test_supports_sampler_stats(self):
         with pm.Model():
-            pm.Normal("mu", mu=0, sd=1, shape=2)
+            pm.Normal("mu", mu=0, sigma=1, shape=2)
             db = text.Text(self.name)
             pm.sample(20, tune=10, init=None, trace=db, cores=2)
 
@@ -62,6 +62,14 @@ class TestTextDumpLoad(bf.DumpLoadTestCase):
     shape = (2, 3)
 
 
+class TestTextDumpLoadWithPartialChain(bf.DumpLoadTestCase):
+    backend = text.Text
+    load_func = staticmethod(text.load)
+    name = 'text-db'
+    shape = (2, 3)
+    write_partial_chain = True
+
+
 @pytest.mark.xfail(condition=(theano.config.floatX == "float32"), reason="Fails on float32")
 class TestTextDumpFunction(bf.BackendEqualityTestCase):
     backend0 = backend1 = ndarray.NDArray
@@ -71,7 +79,7 @@ class TestTextDumpFunction(bf.BackendEqualityTestCase):
 
     @classmethod
     def setup_class(cls):
-        super(TestTextDumpFunction, cls).setup_class()
+        super().setup_class()
         text.dump(cls.name1, cls.mtrace1)
         with cls.model:
             cls.mtrace1 = text.load(cls.name1)

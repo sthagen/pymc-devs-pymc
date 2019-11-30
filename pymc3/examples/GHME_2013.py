@@ -45,20 +45,20 @@ def interpolate(x0, y0, x, group):
 with Model() as model:
     coeff_sd = HalfCauchy('coeff_sd', 5)
 
-    y = GaussianRandomWalk('y', sd=coeff_sd, shape=(nknots, ncountries))
+    y = GaussianRandomWalk('y', sigma=coeff_sd, shape=(nknots, ncountries))
 
     p = interpolate(knots, y, age, group)
 
     sd = HalfCauchy('sd', 5)
 
-    vals = Normal('vals', p, sd=sd, observed=rate)
+    vals = Normal('vals', p, sigma=sd, observed=rate)
 
 
 def run(n=3000):
     if n == "short":
         n = 150
     with model:
-        trace = sample(n, tune=int(n/2))
+        trace = sample(n, tune=int(n/2), init='advi+adapt_diag')
 
     for i, country in enumerate(countries):
         plt.subplot(2, 3, i + 1)

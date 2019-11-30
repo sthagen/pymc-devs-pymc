@@ -53,10 +53,10 @@ Ported to PyMC3 by Peadar Coyle and Chris Fonnesbeck (c) 2016.
 def build_model():
     y = shared(np.array([15, 10, 16, 11, 9, 11, 10, 18], dtype=np.float32))
     with pm.Model() as arma_model:
-        sigma = pm.HalfCauchy('sigma', 5.)
-        theta = pm.Normal('theta', 0., sd=2.)
-        phi = pm.Normal('phi', 0., sd=2.)
-        mu = pm.Normal('mu', 0., sd=10.)
+        sigma = pm.HalfNormal('sigma', 5.)
+        theta = pm.Normal('theta', 0., sigma=1.)
+        phi = pm.Normal('phi', 0., sigma=2.)
+        mu = pm.Normal('mu', 0., sigma=10.)
 
         err0 = y[0] - (mu + phi * mu)
 
@@ -69,18 +69,19 @@ def build_model():
                       outputs_info=[err0],
                       non_sequences=[mu, phi, theta])
 
-        pm.Potential('like', pm.Normal.dist(0, sd=sigma).logp(err))
+        pm.Potential('like', pm.Normal.dist(0, sigma=sigma).logp(err))
     return arma_model
 
 
 def run(n_samples=1000):
     model = build_model()
     with model:
-        trace = pm.sample(draws=n_samples)
+        trace = pm.sample(draws=n_samples,
+                          tune=1000,
+                          target_accept=.99)
 
-    burn = n_samples // 10
-    pm.plots.traceplot(trace[burn:])
-    pm.plots.forestplot(trace[burn:])
+    pm.plots.traceplot(trace)
+    pm.plots.forestplot(trace)
 
 
 if __name__ == '__main__':

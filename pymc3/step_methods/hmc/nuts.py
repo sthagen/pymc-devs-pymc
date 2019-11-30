@@ -1,5 +1,3 @@
-from __future__ import division
-
 from collections import namedtuple
 
 import numpy as np
@@ -64,6 +62,7 @@ class NUTS(BaseHMC):
     - `step_size_bar`: The current best known step-size. After the tuning
       samples, the step size is set to this value. This should converge
       during tuning.
+    - `model_logp`: The model log-likelihood for this sample.
 
     References
     ----------
@@ -86,6 +85,7 @@ class NUTS(BaseHMC):
         'energy_error': np.float64,
         'energy': np.float64,
         'max_energy_error': np.float64,
+        'model_logp': np.float64,
     }]
 
     def __init__(self, vars=None, max_treedepth=10, early_max_treedepth=8,
@@ -121,14 +121,10 @@ class NUTS(BaseHMC):
             Whether step size adaptation should be enabled. If this is
             disabled, `k`, `t0`, `gamma` and `target_accept` are ignored.
         max_treedepth : int, default=10
-            The maximum tree depth. Trajectories are stoped when this
+            The maximum tree depth. Trajectories are stopped when this
             depth is reached.
         early_max_treedepth : int, default=8
             The maximum tree depth during the first 200 tuning samples.
-        integrator : str, default "leapfrog"
-            The integrator to use for the trajectories. One of "leapfrog",
-            "two-stage" or "three-stage". The second two can increase
-            sampling speed for some high dimensional problems.
         scaling : array_like, ndim = {1,2}
             The inverse mass, or precision matrix. One dimensional arrays are
             interpreted as diagonal matrices. If `is_cov` is set to True,
@@ -149,7 +145,7 @@ class NUTS(BaseHMC):
         This is usually achieved by setting the `tune` parameter if
         `pm.sample` to the desired number of tuning steps.
         """
-        super(NUTS, self).__init__(vars, **kwargs)
+        super().__init__(vars, **kwargs)
 
         self.max_treedepth = max_treedepth
         self.early_max_treedepth = early_max_treedepth
@@ -184,8 +180,8 @@ class NUTS(BaseHMC):
             return Competence.IDEAL
         return Competence.INCOMPATIBLE
 
-    def warnings(self, strace):
-        warnings = super(NUTS, self).warnings(strace)
+    def warnings(self):
+        warnings = super().warnings()
         n_samples = self._samples_after_tune
         n_treedepth = self._reached_max_treedepth
 
@@ -199,7 +195,7 @@ class NUTS(BaseHMC):
 
 
 # A proposal for the next position
-Proposal = namedtuple("Proposal", "q, q_grad, energy, p_accept")
+Proposal = namedtuple("Proposal", "q, q_grad, energy, p_accept, logp")
 
 # A subtree of the binary tree built by nuts.
 Subtree = namedtuple(
@@ -207,7 +203,7 @@ Subtree = namedtuple(
     "left, right, p_sum, proposal, log_size, accept_sum, n_proposals")
 
 
-class _Tree(object):
+class _Tree:
     def __init__(self, ndim, integrator, start, step_size, Emax):
         """Binary tree from the NUTS algorithm.
 
@@ -231,7 +227,8 @@ class _Tree(object):
         self.start_energy = np.array(start.energy)
 
         self.left = self.right = start
-        self.proposal = Proposal(start.q, start.q_grad, start.energy, 1.0)
+        self.proposal = Proposal(
+            start.q, start.q_grad, start.energy, 1.0, start.model_logp)
         self.depth = 0
         self.log_size = 0
         self.accept_sum = 0
@@ -254,10 +251,18 @@ class _Tree(object):
         if direction > 0:
             tree, diverging, turning = self._build_subtree(
                 self.right, self.depth, floatX(np.asarray(self.step_size)))
+            leftmost_begin, leftmost_end = self.left, self.right
+            rightmost_begin, rightmost_end = tree.left, tree.right
+            leftmost_p_sum = self.p_sum
+            rightmost_p_sum = tree.p_sum
             self.right = tree.right
         else:
             tree, diverging, turning = self._build_subtree(
                 self.left, self.depth, floatX(np.asarray(-self.step_size)))
+            leftmost_begin, leftmost_end = tree.right, tree.left
+            rightmost_begin, rightmost_end = self.left, self.right
+            leftmost_p_sum = tree.p_sum
+            rightmost_p_sum = self.p_sum
             self.left = tree.right
 
         self.depth += 1
@@ -274,9 +279,16 @@ class _Tree(object):
         self.log_size = np.logaddexp(self.log_size, tree.log_size)
         self.p_sum[:] += tree.p_sum
 
-        left, right = self.left, self.right
-        p_sum = self.p_sum
-        turning = (p_sum.dot(left.v) <= 0) or (p_sum.dot(right.v) <= 0)
+        # Additional turning check only when tree depth > 0 to avoid redundant work
+        if self.depth > 0:
+            left, right = self.left, self.right
+            p_sum = self.p_sum
+            turning = (p_sum.dot(left.v) <= 0) or (p_sum.dot(right.v) <= 0)
+            p_sum1 = leftmost_p_sum + rightmost_begin.p
+            turning1 = (p_sum1.dot(leftmost_begin.v) <= 0) or (p_sum1.dot(rightmost_begin.v) <= 0)
+            p_sum2 = leftmost_end.p + rightmost_p_sum
+            turning2 = (p_sum2.dot(leftmost_end.v) <= 0) or (p_sum2.dot(rightmost_end.v) <= 0)
+            turning = (turning | turning1 | turning2)
 
         return diverging, turning
 
@@ -298,7 +310,7 @@ class _Tree(object):
                 p_accept = min(1, np.exp(-energy_change))
                 log_size = -energy_change
                 proposal = Proposal(
-                    right.q, right.q_grad, right.energy, p_accept)
+                    right.q, right.q_grad, right.energy, p_accept, right.model_logp)
                 tree = Subtree(right, right, right.p,
                                proposal, log_size, p_accept, 1)
                 return tree, None, False
@@ -327,6 +339,13 @@ class _Tree(object):
         if not (diverging or turning):
             p_sum = tree1.p_sum + tree2.p_sum
             turning = (p_sum.dot(left.v) <= 0) or (p_sum.dot(right.v) <= 0)
+            # Additional U turn check only when depth > 1 to avoid redundant work.
+            if depth - 1 > 0:
+                p_sum1 = tree1.p_sum + tree2.left.p
+                turning1 = (p_sum1.dot(tree1.left.v) <= 0) or (p_sum1.dot(tree2.left.v) <= 0)
+                p_sum2 = tree1.right.p + tree2.p_sum
+                turning2 = (p_sum2.dot(tree1.right.v) <= 0) or (p_sum2.dot(tree2.right.v) <= 0)
+                turning = (turning | turning1 | turning2)
 
             log_size = np.logaddexp(tree1.log_size, tree2.log_size)
             if logbern(tree2.log_size - log_size):
@@ -353,4 +372,5 @@ class _Tree(object):
             'energy': self.proposal.energy,
             'tree_size': self.n_proposals,
             'max_energy_error': self.max_energy_change,
+            'model_logp': self.proposal.logp,
         }

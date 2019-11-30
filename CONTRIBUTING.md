@@ -11,7 +11,7 @@ There are 4 main ways of contributing to the PyMC3 project (in descending order 
 
 # Opening issues
 
-We appreciate being notified of problems with the existing PyMC code. We prefer that issues be filed the on [Gitub Issue Tracker](https://github.com/pymc-devs/pymc3/issues), rather than on social media or by direct email to the developers.
+We appreciate being notified of problems with the existing PyMC code. We prefer that issues be filed the on [Github Issue Tracker](https://github.com/pymc-devs/pymc3/issues), rather than on social media or by direct email to the developers.
 
 Please verify that your issue is not being currently addressed by other issues or pull requests by using the GitHub search tool to look for key words in the project issue tracker.
 
@@ -21,7 +21,7 @@ While issue reporting is valuable, we strongly encourage users who are inclined 
 
 Contributors are also encouraged to contribute new code to enhance PyMC3's functionality, also via pull requests. Please consult the [PyMC3 documentation](https://pymc-devs.github.io/pymc3/) to ensure that any new contribution does not strongly overlap with existing functionality.
 
-The preferred workflow for contributing to PyMC3 is to fork the [GitHUb repository](https://github.com/pymc-devs/pymc3/), clone it to your local machine, and develop on a feature branch.
+The preferred workflow for contributing to PyMC3 is to fork the [GitHub repository](https://github.com/pymc-devs/pymc3/), clone it to your local machine, and develop on a feature branch.
 
 ## Steps:
 
@@ -100,7 +100,7 @@ tools:
 
   ```bash
   $ pip install pytest pytest-cov coverage
-  $ pytest --cov=pymc3 pymc3/tests/tests_for_package.py
+  $ pytest --cov=pymc3 pymc3/tests/<name of test>.py
   ```
 
 * No `pyflakes` warnings, check with:
@@ -138,15 +138,15 @@ You may also use it to run the test suite, with
 
 ```bash
 $  docker exec -it pymc3  bash # logon to the container
-$  cd ~/pymc3  
-$  . ./scripts/test.sh # takes a while!
+$  cd ~/pymc3/tests
+$  . ./../../scripts/test.sh # takes a while!
 ```
 
 This should be quite close to how the tests run on TravisCI.
 
 If the container was started without opening the browser, you
-need the a token to work with the notebook. This token can be
-access with
+need the notebook instances token to work with the notebook. This token can be
+accessed with
 
 ```
 docker exec -it pymc3 jupyter notebook list
@@ -154,7 +154,8 @@ docker exec -it pymc3 jupyter notebook list
 
 ## Style guide
 
-Follow [TensorFlow's style guide](https://www.tensorflow.org/versions/master/how_tos/style_guide.html) or the [Google style guide](https://google.github.io/styleguide/pyguide.html) for writing code, which more or less follows PEP 8.
+Follow [TensorFlow's style guide](https://www.tensorflow.org/community/contribute/code_style) or the [Google style guide](https://google.github.io/styleguide/pyguide.html) for writing code, which more or less follows PEP 8.
 
+For documentation strings, we *prefer* [numpy style](https://numpydoc.readthedocs.io/en/latest/format.html) to comply with the style that predominates in our upstream dependencies.
 
 #### This guide was derived from the [scikit-learn guide to contributing](https://github.com/scikit-learn/scikit-learn/blob/master/CONTRIBUTING.md)

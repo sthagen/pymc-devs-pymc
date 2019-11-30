@@ -25,7 +25,7 @@ class Competence(IntEnum):
     IDEAL = 3
 
 
-class BlockedStep(object):
+class BlockedStep:
 
     generates_stats = False
 
@@ -59,7 +59,7 @@ class BlockedStep(object):
             # and append them to a CompoundStep
             steps = []
             for var in vars:
-                step = super(BlockedStep, cls).__new__(cls)
+                step = super().__new__(cls)
                 # If we don't return the instance we have to manually
                 # call __init__
                 step.__init__([var], *args, **kwargs)
@@ -69,7 +69,7 @@ class BlockedStep(object):
 
             return CompoundStep(steps)
         else:
-            step = super(BlockedStep, cls).__new__(cls)
+            step = super().__new__(cls)
             # Hack for creating the class correctly when unpickling.
             step.__newargs = (vars, ) + args, kwargs
             return step
@@ -87,12 +87,25 @@ class BlockedStep(object):
         vars = np.atleast_1d(vars)
         have_grad = np.atleast_1d(have_grad)
         competences = []
-        for var,has_grad in zip(vars, have_grad):
+        for var, has_grad in zip(vars, have_grad):
             try:
                 competences.append(cls.competence(var, has_grad))
             except TypeError:
                 competences.append(cls.competence(var))
         return competences
+
+    @property
+    def vars_shape_dtype(self):
+        shape_dtypes = {}
+        for var in self.vars:
+            dtype = np.dtype(var.dtype)
+            shape = var.dshape
+            shape_dtypes[var.name] = (shape, dtype)
+        return shape_dtypes
+
+    def stop_tuning(self):
+        if hasattr(self, 'tune'):
+            self.tune = False
 
 
 class ArrayStep(BlockedStep):
@@ -184,7 +197,7 @@ class PopulationArrayStepShared(ArrayStepShared):
         self.population = None
         self.this_chain = None
         self.other_chains = None
-        return super(PopulationArrayStepShared, self).__init__(vars, shared, blocked)
+        return super().__init__(vars, shared, blocked)
 
     def link_population(self, population, chain_index):
         """Links the sampler to the population.
@@ -211,8 +224,20 @@ class GradientSharedStep(BlockedStep):
         self.vars = vars
         self.blocked = blocked
 
-        self._logp_dlogp_func = model.logp_dlogp_function(
+        func = model.logp_dlogp_function(
             vars, dtype=dtype, **theano_kwargs)
+
+        # handle edge case discovered in #2948
+        try:
+            func.set_extra_values(model.test_point)
+            q = func.dict_to_array(model.test_point)
+            logp, dlogp = func(q)
+        except ValueError:
+            theano_kwargs.update(mode='FAST_COMPILE')
+            func = model.logp_dlogp_function(
+                vars, dtype=dtype, **theano_kwargs)
+
+        self._logp_dlogp_func = func
 
     def step(self, point):
         self._logp_dlogp_func.set_extra_values(point)

@@ -1,4 +1,3 @@
-from __future__ import division
 import sys
 import theano.tensor as tt
 # pylint: disable=unused-import
@@ -51,10 +50,10 @@ def kron_matrix_op(krons, m, op):
 
     Parameters
     -----------
-    krons: list of square 2D array-like objects
-           D square matrices [A_1, A_2, ..., A_D] to be Kronecker'ed:
-              A = A_1 \otimes A_2 \otimes ... \otimes A_D
-           Product of column dimensions must be N
+    krons : list of square 2D array-like objects
+            D square matrices :math:`[A_1, A_2, ..., A_D]` to be Kronecker'ed
+            :math:`A = A_1 \otimes A_2 \otimes ... \otimes A_D`
+            Product of column dimensions must be :math:`N`
     m    : NxM array or 1D array (treated as Nx1)
            Object that krons act upon
     """
@@ -71,15 +70,15 @@ def kron_matrix_op(krons, m, op):
         m = m[:, None]  # Treat 1D array as Nx1 matrix
     if m.ndim != 2:  # Has not been tested otherwise
         raise ValueError('m must have ndim <= 2, not {}'.format(mat.ndim))
-    m = m.T
-    res, _ = theano.scan(kron_vector_op, sequences=[m])
-    return res.T
+    res = kron_vector_op(m)
+    res_shape = res.shape
+    return tt.reshape(res, (res_shape[1], res_shape[0])).T
 
 
 # Define kronecker functions that work on 1D and 2D arrays
 kron_dot = partial(kron_matrix_op, op=tt.dot)
 kron_solve_lower = partial(kron_matrix_op, op=tt.slinalg.solve_lower_triangular)
-
+kron_solve_upper = partial(kron_matrix_op, op=tt.slinalg.solve_upper_triangular)
 
 def flat_outer(a, b):
     return tt.outer(a, b).ravel()
@@ -114,13 +113,18 @@ def logsumexp(x, axis=None):
 def logaddexp(a, b):
     diff = b - a
     return tt.switch(diff > 0,
-                    b + tt.log1p(tt.exp(-diff)),
-                    a + tt.log1p(tt.exp(diff)))
+                     b + tt.log1p(tt.exp(-diff)),
+                     a + tt.log1p(tt.exp(diff)))
+
+
+def logdiffexp(a, b):
+    """log(exp(a) - exp(b))"""
+    return a + log1mexp(a - b)
 
 
 def invlogit(x, eps=sys.float_info.epsilon):
     """The inverse of the logit function, 1 / (1 + exp(-x))."""
-    return tt.nnet.sigmoid(x)
+    return (1. - 2. * eps) / (1. + tt.exp(-x)) + eps
 
 
 def logit(p):
@@ -130,7 +134,7 @@ def logit(p):
 def log1pexp(x):
     """Return log(1 + exp(x)), also called softplus.
 
-    This function is numerically more stable than the naive approch.
+    This function is numerically more stable than the naive approach.
     """
     return tt.nnet.softplus(x)
 
@@ -138,7 +142,7 @@ def log1pexp(x):
 def log1mexp(x):
     """Return log(1 - exp(-x)).
 
-    This function is numerically more stable than the naive approch.
+    This function is numerically more stable than the naive approach.
 
     For details, see
     https://cran.r-project.org/web/packages/Rmpfr/vignettes/log1mexp-note.pdf

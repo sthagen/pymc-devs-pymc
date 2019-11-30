@@ -2,6 +2,7 @@ import numpy as np
 import numpy.testing as npt
 from pymc3.tests import backend_fixtures as bf
 from pymc3.backends import base, ndarray
+import pymc3 as pm
 import pytest
 
 
@@ -101,15 +102,39 @@ class TestMultiTrace(bf.ModelBackendSetupTestCase):
     shape = ()
 
     def setup_method(self):
-        super(TestMultiTrace, self).setup_method()
+        super().setup_method()
         self.strace0 = self.strace
 
-        super(TestMultiTrace, self).setup_method()
+        super().setup_method()
         self.strace1 = self.strace
 
     def test_multitrace_nonunique(self):
         with pytest.raises(ValueError):
             base.MultiTrace([self.strace0, self.strace1])
+
+    def test_merge_traces_no_traces(self):
+        with pytest.raises(ValueError):
+            base.merge_traces([])
+
+    def test_merge_traces_diff_lengths(self):
+        with self.model:
+            strace0 = self.backend(self.name)
+            strace0.setup(self.draws, 1)
+            for i in range(self.draws):
+                strace0.record(self.test_point)
+            strace0.close()
+        mtrace0 = base.MultiTrace([self.strace0])
+
+        with self.model:
+            strace1 = self.backend(self.name)
+            strace1.setup(2 * self.draws, 1)
+            for i in range(2 * self.draws):
+                strace1.record(self.test_point)
+            strace1.close()
+        mtrace1 = base.MultiTrace([strace1])
+
+        with pytest.raises(ValueError):
+            base.merge_traces([mtrace0, mtrace1])
 
     def test_merge_traces_nonunique(self):
         mtrace0 = base.MultiTrace([self.strace0])
@@ -119,7 +144,7 @@ class TestMultiTrace(bf.ModelBackendSetupTestCase):
             base.merge_traces([mtrace0, mtrace1])
 
 
-class TestMultiTrace_add_values(bf.ModelBackendSampledTestCase):
+class TestMultiTrace_add_remove_values(bf.ModelBackendSampledTestCase):
     name = None
     backend = ndarray.NDArray
     shape = ()
@@ -133,9 +158,12 @@ class TestMultiTrace_add_values(bf.ModelBackendSampledTestCase):
         assert len(orig_varnames) == len(mtrace.varnames) - 1
         assert name in mtrace.varnames
         assert np.all(mtrace[orig_varnames[0]] == mtrace[name])
+        mtrace.remove_values(name)
+        assert len(orig_varnames) == len(mtrace.varnames)
+        assert name not in mtrace.varnames
 
 
-class TestSqueezeCat(object):
+class TestSqueezeCat:
 
     def setup_method(self):
         self.x = np.arange(10)
@@ -165,3 +193,71 @@ class TestSqueezeCat(object):
         expected = np.concatenate([self.x, self.y])
         result = base._squeeze_cat([self.x, self.y], True, True)
         npt.assert_equal(result, expected)
+
+class TestSaveLoad:
+    @staticmethod
+    def model():
+        with pm.Model() as model:
+            x = pm.Normal('x', 0, 1)
+            y = pm.Normal('y', x, 1, observed=2)
+            z = pm.Normal('z', x + y, 1)
+        return model
+
+    @classmethod
+    def setup_class(cls):
+        with TestSaveLoad.model():
+            cls.trace = pm.sample()
+
+    def test_save_new_model(self, tmpdir_factory):
+        directory = str(tmpdir_factory.mktemp('data'))
+        save_dir = pm.save_trace(self.trace, directory, overwrite=True)
+
+        assert save_dir == directory
+        with pm.Model() as model:
+            w = pm.Normal('w', 0, 1)
+            new_trace = pm.sample()
+
+        with pytest.raises(OSError):
+            _ = pm.save_trace(new_trace, directory)
+
+        _ = pm.save_trace(new_trace, directory, overwrite=True)
+        with model:
+            new_trace_copy = pm.load_trace(directory)
+
+        assert (new_trace['w'] == new_trace_copy['w']).all()
+
+    def test_save_and_load(self, tmpdir_factory):
+        directory = str(tmpdir_factory.mktemp('data'))
+        save_dir = pm.save_trace(self.trace, directory, overwrite=True)
+
+        assert save_dir == directory
+
+        trace2 = pm.load_trace(directory, model=TestSaveLoad.model())
+
+        for var in ('x', 'z'):
+            assert (self.trace[var] == trace2[var]).all()
+
+    def test_bad_load(self, tmpdir_factory):
+        directory = str(tmpdir_factory.mktemp('data'))
+        with pytest.raises(pm.TraceDirectoryError):
+            pm.load_trace(directory, model=TestSaveLoad.model())
+
+    def test_sample_posterior_predictive(self, tmpdir_factory):
+        directory = str(tmpdir_factory.mktemp('data'))
+        save_dir = pm.save_trace(self.trace, directory, overwrite=True)
+
+        assert save_dir == directory
+
+        seed = 10
+        np.random.seed(seed)
+        with TestSaveLoad.model():
+            ppc = pm.sample_posterior_predictive(self.trace)
+
+        seed = 10
+        np.random.seed(seed)
+        with TestSaveLoad.model():
+            trace2 = pm.load_trace(directory)
+            ppc2 = pm.sample_posterior_predictive(trace2)
+
+        for key, value in ppc.items():
+            assert (value == ppc2[key]).all()

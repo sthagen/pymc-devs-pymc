@@ -1,3 +1,4 @@
+from typing import Dict, List, Any
 from copy import copy
 import io
 import os
@@ -12,7 +13,8 @@ __all__ = [
     'get_data',
     'GeneratorAdapter',
     'Minibatch',
-    'align_minibatches'
+    'align_minibatches',
+    'Data',
 ]
 
 
@@ -33,7 +35,7 @@ def get_data(filename):
 
 class GenTensorVariable(tt.TensorVariable):
     def __init__(self, op, type, name=None):
-        super(GenTensorVariable, self).__init__(type=type, name=name)
+        super().__init__(type=type, name=name)
         self.op = op
 
     def set_gen(self, gen):
@@ -48,7 +50,7 @@ class GenTensorVariable(tt.TensorVariable):
         return cp
 
 
-class GeneratorAdapter(object):
+class GeneratorAdapter:
     """
     Helper class that helps to infer data type of generator with looking
     at the first item, preserving the order of the resulting generator
@@ -98,23 +100,23 @@ class Minibatch(tt.TensorVariable):
     ----------
     data : :class:`ndarray`
         initial data
-    batch_size : `int` or `List[int|tuple(size, random_seed)]`
-        batch size for inference, random seed is needed 
+    batch_size : ``int`` or ``List[int|tuple(size, random_seed)]``
+        batch size for inference, random seed is needed
         for child random generators
-    dtype : `str`
+    dtype : ``str``
         cast data to specific type
     broadcastable : tuple[bool]
-        change broadcastable pattern that defaults to `(False, ) * ndim`
-    name : `str`
+        change broadcastable pattern that defaults to ``(False, ) * ndim``
+    name : ``str``
         name for tensor, defaults to "Minibatch"
-    random_seed : `int`
+    random_seed : ``int``
         random seed that is used by default
-    update_shared_f : `callable`
-        returns :class:`ndarray` that will be carefully 
+    update_shared_f : ``callable``
+        returns :class:`ndarray` that will be carefully
         stored to underlying shared variable
-        you can use it to change source of 
-        minibatches programmatically 
-    in_memory_size : `int` or `List[int|slice|Ellipsis]`
+        you can use it to change source of
+        minibatches programmatically
+    in_memory_size : ``int`` or ``List[int|slice|Ellipsis]``
         data size for storing in theano.shared
 
     Attributes
@@ -124,6 +126,14 @@ class Minibatch(tt.TensorVariable):
     minibatch : minibatch tensor
         Used for training
 
+    Notes
+    -----
+    Below is a common use case of Minibatch within the variational inference.
+    Importantly, we need to make PyMC3 "aware" of minibatch being used in inference.
+    Otherwise, we will get the wrong :math:`logp` for the model.
+    To do so, we need to pass the ``total_size`` parameter to the observed node, which correctly scales
+    the density of the model logp that is affected by Minibatch. See more in examples below.
+
     Examples
     --------
     Consider we have data
@@ -132,16 +142,16 @@ class Minibatch(tt.TensorVariable):
     if we want 1d slice of size 10 we do
     >>> x = Minibatch(data, batch_size=10)
 
-    Note, that your data is cast to `floatX` if it is not integer type
-    But you still can add `dtype` kwarg for :class:`Minibatch` 
+    Note that your data is cast to ``floatX`` if it is not integer type
+    But you still can add the ``dtype`` kwarg for :class:`Minibatch`
 
     in case we want 10 sampled rows and columns
-    `[(size, seed), (size, seed)]` it is
+    ``[(size, seed), (size, seed)]`` it is
     >>> x = Minibatch(data, batch_size=[(10, 42), (10, 42)], dtype='int32')
     >>> assert str(x.dtype) == 'int32'
 
     or simpler with default random seed = 42
-    `[size, size]`
+    ``[size, size]``
     >>> x = Minibatch(data, batch_size=[10, 10])
 
     x is a regular :class:`TensorVariable` that supports any math
@@ -157,24 +167,24 @@ class Minibatch(tt.TensorVariable):
     >>> with model:
     ...     approx = pm.fit()
 
-    Notable thing is that :class:`Minibatch` has `shared`, `minibatch`, attributes
+    Notable thing is that :class:`Minibatch` has ``shared``, ``minibatch``, attributes
     you can call later
     >>> x.set_value(np.random.laplace(size=(100, 100)))
 
     and minibatches will be then from new storage
-    it directly affects `x.shared`.
+    it directly affects ``x.shared``.
     the same thing would be but less convenient
     >>> x.shared.set_value(pm.floatX(np.random.laplace(size=(100, 100))))
 
     programmatic way to change storage is as follows
-    I import `partial` for simplicity
+    I import ``partial`` for simplicity
     >>> from functools import partial
     >>> datagen = partial(np.random.laplace, size=(100, 100))
     >>> x = Minibatch(datagen(), batch_size=10, update_shared_f=datagen)
     >>> x.update_shared()
 
     To be more concrete about how we get minibatch, here is a demo
-    1) create shared variable 
+    1) create shared variable
     >>> shared = theano.shared(data)
 
     2) create random slice of size 10
@@ -183,12 +193,12 @@ class Minibatch(tt.TensorVariable):
     3) take that slice
     >>> minibatch = shared[ridx]
 
-    That's done. Next you can use this minibatch somewhere else. 
+    That's done. Next you can use this minibatch somewhere else.
     You can see that implementation does not require fixed shape
     for shared variable. Feel free to use that if needed.
 
     Suppose you need some replacements in the graph, e.g. change minibatch to testdata
-    >>> node = x ** 2  # arbitrary expressions on minibatch `x`
+    >>> node = x ** 2  # arbitrary expressions on minibatch ``x``
     >>> testdata = pm.floatX(np.random.laplace(size=(1000, 10)))
 
     Then you should create a dict with replacements
@@ -205,25 +215,25 @@ class Minibatch(tt.TensorVariable):
     For more complex slices some more code is needed that can seem not so clear
     >>> moredata = np.random.rand(10, 20, 30, 40, 50)
 
-    default `total_size` that can be passed to `PyMC3` random node
-    is then `(10, 20, 30, 40, 50)` but can be less verbose in some cases
+    default ``total_size`` that can be passed to ``PyMC3`` random node
+    is then ``(10, 20, 30, 40, 50)`` but can be less verbose in some cases
 
-    1) Advanced indexing, `total_size = (10, Ellipsis, 50)`
+    1) Advanced indexing, ``total_size = (10, Ellipsis, 50)``
     >>> x = Minibatch(moredata, [2, Ellipsis, 10])
 
     We take slice only for the first and last dimension
     >>> assert x.eval().shape == (2, 20, 30, 40, 10)
 
-    2) Skipping particular dimension, `total_size = (10, None, 30)` 
+    2) Skipping particular dimension, ``total_size = (10, None, 30)``
     >>> x = Minibatch(moredata, [2, None, 20])
     >>> assert x.eval().shape == (2, 20, 20, 40, 50)
 
-    3) Mixing that all, `total_size = (10, None, 30, Ellipsis, 50)`
+    3) Mixing that all, ``total_size = (10, None, 30, Ellipsis, 50)``
     >>> x = Minibatch(moredata, [2, None, 20, Ellipsis, 10])
     >>> assert x.eval().shape == (2, 20, 20, 40, 10)
     """
 
-    RNG = collections.defaultdict(list)
+    RNG = collections.defaultdict(list) # type: Dict[str, List[Any]]
 
     @theano.configparser.change_flags(compute_test_value='raise')
     def __init__(self, data, batch_size=128, dtype=None, broadcastable=None, name='Minibatch',
@@ -241,8 +251,7 @@ class Minibatch(tt.TensorVariable):
             broadcastable = (False, ) * minibatch.ndim
         minibatch = tt.patternbroadcast(minibatch, broadcastable)
         self.minibatch = minibatch
-        super(Minibatch, self).__init__(
-            self.minibatch.type, None, None, name=name)
+        super().__init__(self.minibatch.type, None, None, name=name)
         theano.Apply(
             theano.compile.view_op,
             inputs=[self.minibatch], outputs=[self])
@@ -348,7 +357,6 @@ class Minibatch(tt.TensorVariable):
                        if t is not None else tt.arange(shp_end[i])
                        for i, t in enumerate(end)]
             slc = slc_begin + mid + slc_end
-            slc = slc
         else:
             raise TypeError('Unrecognized size type, %r' % batch_size)
         return pm.theanof.ix_(*slc)
@@ -379,3 +387,67 @@ def align_minibatches(batches=None):
                 raise TypeError('{b} is not a Minibatch')
             for rng in Minibatch.RNG[id(b)]:
                 rng.seed()
+
+
+class Data:
+    """Data container class that wraps the theano SharedVariable class
+    and lets the model be aware of its inputs and outputs.
+
+    Parameters
+    ----------
+    name : str
+        The name for this variable
+    value
+        A value to associate with this variable
+
+    Examples
+    --------
+
+    .. code:: ipython
+
+        >>> import pymc3 as pm
+        >>> import numpy as np
+        >>> # We generate 10 datasets
+        >>> true_mu = [np.random.randn() for _ in range(10)]
+        >>> observed_data = [mu + np.random.randn(20) for mu in true_mu]
+
+        >>> with pm.Model() as model:
+        ...     data = pm.Data('data', observed_data[0])
+        ...     mu = pm.Normal('mu', 0, 10)
+        ...     pm.Normal('y', mu=mu, sigma=1, observed=data)
+
+    .. code:: ipython
+
+        >>> # Generate one trace for each dataset
+        >>> traces = []
+        >>> for data_vals in observed_data:
+        ...     with model:
+        ...         # Switch out the observed dataset
+        ...         pm.set_data({'data': data_vals})
+        ...         traces.append(pm.sample())
+
+    To set the value of the data container variable, check out
+    :func:`pymc3.model.set_data()`.
+
+    For more information, take a look at this example notebook
+    https://docs.pymc.io/notebooks/data_container.html
+    """
+    def __new__(self, name, value):
+        # `pm.model.pandas_to_array` takes care of parameter `value` and
+        # transforms it to something digestible for pymc3
+        shared_object = theano.shared(pm.model.pandas_to_array(value), name)
+
+        # To draw the node for this variable in the graphviz Digraph we need
+        # its shape.
+        shared_object.dshape = tuple(shared_object.shape.eval())
+
+        # Add data container to the named variables of the model.
+        try:
+            model = pm.Model.get_context()
+        except TypeError:
+            raise TypeError("No model on context stack, which is needed to "
+                            "instantiate a data container. Add variable "
+                            "inside a 'with model:' block.")
+        model.add_random_variable(shared_object)
+
+        return shared_object

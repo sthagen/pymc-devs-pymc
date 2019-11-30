@@ -8,7 +8,7 @@ from theano.sandbox.rng_mrg import MRG_RandomStreams
 
 from .blocking import ArrayOrdering
 from .data import GeneratorAdapter
-from .vartypes import typefilter, continuous_types
+from .vartypes import typefilter, continuous_types, int_types
 
 __all__ = ['gradient',
            'hessian',
@@ -16,6 +16,7 @@ __all__ = ['gradient',
            'inputvars',
            'cont_inputs',
            'floatX',
+           'intX',
            'smartfloatX',
            'jacobian',
            'CallableTensor',
@@ -23,7 +24,8 @@ __all__ = ['gradient',
            'make_shared_replacements',
            'generator',
            'set_tt_rng',
-           'tt_rng']
+           'tt_rng',
+           'take_along_axis']
 
 
 def inputvars(a):
@@ -67,9 +69,27 @@ def floatX(X):
         return np.asarray(X, dtype=theano.config.floatX)
 
 
+_conversion_map = {'float64': 'int32',
+                   'float32': 'int16',
+                   'float16': 'int8',
+                   'float8': 'int8'}
+
+
+def intX(X):
+    """
+    Convert a theano tensor or numpy array to theano.tensor.int32 type.
+    """
+    intX = _conversion_map[theano.config.floatX]
+    try:
+        return X.astype(intX)
+    except AttributeError:
+        # Scalar passed
+        return np.asarray(X, dtype=intX)
+
+
 def smartfloatX(x):
     """
-    Convert non int types to floatX 
+    Converts numpy float values to floatX and leaves values of other types unchanged.
     """
     if str(x.dtype).startswith('float'):
         x = floatX(x)
@@ -180,7 +200,7 @@ class IdentityOp(scalar.UnaryScalarOp):
         return "{z} = {x};".format(x=inp[0], z=out[0])
 
     def __eq__(self, other):
-        return type(self) == type(other)
+        return isinstance(self, type(other))
 
     def __hash__(self):
         return hash(type(self))
@@ -254,7 +274,7 @@ def reshape_t(x, shape):
         return x[0]
 
 
-class CallableTensor(object):
+class CallableTensor:
     """Turns a symbolic variable with one input into a function that returns symbolic arguments
     with the one variable replaced with the input.
     """
@@ -298,7 +318,7 @@ class GeneratorOp(Op):
     __props__ = ('generator',)
 
     def __init__(self, gen, default=None):
-        super(GeneratorOp, self).__init__()
+        super().__init__()
         if not isinstance(gen, GeneratorAdapter):
             gen = GeneratorAdapter(gen)
         self.generator = gen
@@ -460,3 +480,60 @@ def largest_common_dtype(tensors):
                  else smartfloatX(np.asarray(t)).dtype
                  for t in tensors)
     return np.stack([np.ones((), dtype=dtype) for dtype in dtypes]).dtype
+
+
+def _make_along_axis_idx(arr_shape, indices, axis):
+    # compute dimensions to iterate over
+    if str(indices.dtype) not in int_types:
+        raise IndexError('`indices` must be an integer array')
+    shape_ones = (1,) * indices.ndim
+    dest_dims = list(range(axis)) + [None] + list(range(axis+1, indices.ndim))
+
+    # build a fancy index, consisting of orthogonal aranges, with the
+    # requested index inserted at the right location
+    fancy_index = []
+    for dim, n in zip(dest_dims, arr_shape):
+        if dim is None:
+            fancy_index.append(indices)
+        else:
+            ind_shape = shape_ones[:dim] + (-1,) + shape_ones[dim+1:]
+            fancy_index.append(tt.arange(n).reshape(ind_shape))
+
+    return tuple(fancy_index)
+
+
+def take_along_axis(arr, indices, axis=0):
+    """Take values from the input array by matching 1d index and data slices.
+
+    This iterates over matching 1d slices oriented along the specified axis in
+    the index and data arrays, and uses the former to look up values in the
+    latter. These slices can be different lengths.
+
+    Functions returning an index along an axis, like argsort and argpartition,
+    produce suitable indices for this function.
+    """
+    arr = tt.as_tensor_variable(arr)
+    indices = tt.as_tensor_variable(indices)
+    # normalize inputs
+    if axis is None:
+        arr = arr.flatten()
+        arr_shape = (len(arr),)  # flatiter has no .shape
+        _axis = 0
+    else:
+        if axis < 0:
+            _axis = arr.ndim + axis
+        else:
+            _axis = axis
+        if _axis < 0 or _axis >= arr.ndim:
+            raise ValueError(
+                "Supplied `axis` value {} is out of bounds of an array with "
+                "ndim = {}".format(axis, arr.ndim)
+            )
+        arr_shape = arr.shape
+    if arr.ndim != indices.ndim:
+        raise ValueError(
+            "`indices` and `arr` must have the same number of dimensions"
+        )
+
+    # use the fancy index
+    return arr[_make_along_axis_idx(arr_shape, indices, _axis)]

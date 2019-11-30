@@ -17,11 +17,13 @@ shape of (3, 2).
 """
 from glob import glob
 import os
+import re
 import pandas as pd
 
 from ..backends import base, ndarray
 from . import tracetab as ttab
 from ..theanof import floatX
+from ..model import modelcontext
 
 
 class Text(base.BaseTrace):
@@ -43,7 +45,7 @@ class Text(base.BaseTrace):
     def __init__(self, name, model=None, vars=None, test_point=None):
         if not os.path.exists(name):
             os.mkdir(name)
-        super(Text, self).__init__(name, model, vars, test_point)
+        super().__init__(name, model, vars, test_point)
 
         self.flat_names = {v: ttab.create_flat_names(v, shape)
                            for v, shape in self.var_shapes.items()}
@@ -99,8 +101,9 @@ class Text(base.BaseTrace):
         self._fh.write(','.join(columns) + '\n')
 
     def close(self):
-        self._fh.close()
-        self._fh = None  # Avoid serialization issue.
+        if self._fh is not None:
+            self._fh.close()
+            self._fh = None  # Avoid serialization issue.
 
     # Selection methods
 
@@ -110,7 +113,6 @@ class Text(base.BaseTrace):
             for key, dtype in self.df.dtypes.iteritems():
                 if "float" in str(dtype):
                     self.df[key] = floatX(self.df[key])
-
 
     def __len__(self):
         if self.filename is None:
@@ -177,11 +179,23 @@ def load(name, model=None):
     straces = []
     for f in files:
         chain = int(os.path.splitext(f)[0].rsplit('-', 1)[1])
-        strace = Text(name, model=model)
+        model_vars_in_chain = _parse_chain_vars(f, model)
+        strace = Text(name, model=model, vars=model_vars_in_chain)
         strace.chain = chain
         strace.filename = f
         straces.append(strace)
     return base.MultiTrace(straces)
+
+
+def _parse_chain_vars(filepath, model):
+    with open(filepath) as f:
+        header = f.readline().split("\n", 1)[0]
+    shape_pattern = re.compile(r"__\d+_\d+")
+    chain_vars = [shape_pattern.split(v)[0] for v in header.split(",")]
+    chain_vars = list(set(chain_vars))
+    m = modelcontext(model)
+    model_vars_in_chain = [v for v in m.unobserved_RVs if v.name in chain_vars]
+    return model_vars_in_chain
 
 
 def dump(name, trace, chains=None):
