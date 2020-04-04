@@ -30,6 +30,7 @@ import warnings
 import numpy as np
 import theano.gradient as tg
 from theano.tensor import Tensor
+import xarray
 
 from .backends.base import BaseTrace, MultiTrace
 from .backends.ndarray import NDArray
@@ -53,6 +54,7 @@ from .util import (
     get_untransformed_name,
     is_transformed_name,
     get_default_varnames,
+    dataset_to_point_dict,
 )
 from .vartypes import discrete_types
 from .exceptions import IncorrectArgumentsError
@@ -226,7 +228,7 @@ def _print_step_hierarchy(s, level=0):
 
 
 def sample(
-    draws=500,
+    draws=1000,
     step=None,
     init="auto",
     n_init=200000,
@@ -235,7 +237,7 @@ def sample(
     chain_idx=0,
     chains=None,
     cores=None,
-    tune=500,
+    tune=1000,
     progressbar=True,
     model=None,
     random_seed=None,
@@ -251,7 +253,7 @@ def sample(
     Parameters
     ----------
     draws: int
-        The number of samples to draw. Defaults to 500. The number of tuned samples are discarded
+        The number of samples to draw. Defaults to 1000. The number of tuned samples are discarded
         by default. See ``discard_tuned_samples``.
     init: str
         Initialization method to use for auto-assigned NUTS samplers.
@@ -272,15 +274,14 @@ def sample(
         * advi: Run ADVI to estimate posterior mean and diagonal mass matrix.
         * advi_map: Initialize ADVI with MAP and use MAP as starting point.
         * map: Use the MAP as starting point. This is discouraged.
-        * nuts: Run NUTS and estimate posterior mean and mass matrix from the trace.
+        * adapt_full: Adapt a dense mass matrix using the sample covariances
     step: function or iterable of functions
         A step function or collection of functions. If there are variables without step methods,
         step methods for those variables will be assigned automatically.  By default the NUTS step
         method will be used, if appropriate to the model; this is a good default for beginning
         users.
     n_init: int
-        Number of iterations of initializer. Only works for 'nuts' and 'ADVI'.
-        If 'ADVI', number of iterations, if 'nuts', number of draws.
+        Number of iterations of initializer. Only works for 'ADVI' init methods.
     start: dict, or array of dict
         Starting point in parameter space (or partial point)
         Defaults to ``trace.point(-1))`` if there is a trace provided and model.test_point if not
@@ -303,7 +304,7 @@ def sample(
         The number of chains to run in parallel. If ``None``, set to the number of CPUs in the
         system, but at most 4.
     tune: int
-        Number of iterations to tune, defaults to 500. Samplers adjust the step sizes, scalings or
+        Number of iterations to tune, defaults to 1000. Samplers adjust the step sizes, scalings or
         similar during tuning. Tuning samples will be drawn in addition to the number specified in
         the ``draws`` argument, and will be discarded unless ``discard_tuned_samples`` is set to
         False.
@@ -360,7 +361,7 @@ def sample(
         >>> with pm.Model() as model: # context management
         ...     p = pm.Beta('p', alpha=alpha, beta=beta)
         ...     y = pm.Binomial('y', n=n, p=p, observed=h)
-        ...     trace = pm.sample(2000, tune=1000, cores=4)
+        ...     trace = pm.sample()
         >>> pm.summary(trace)
                mean        sd  mc_error   hpd_2.5  hpd_97.5
         p  0.604625  0.047086   0.00078  0.510498  0.694774
@@ -1101,10 +1102,10 @@ class PopulationStepper:
 
 
 def _prepare_iter_population(
-    draws:int,
-    chains:list,
+    draws: int,
+    chains: list,
     step,
-    start:list,
+    start: list,
     parallelize:bool,
     tune=None,
     model=None,
@@ -1301,14 +1302,14 @@ def _choose_backend(trace, chain, shortcuts=None, **kwds):
 
 
 def _mp_sample(
-    draws:int,
-    tune:int,
+    draws: int,
+    tune: int,
     step,
-    chains:int,
-    cores:int,
-    chain:int,
-    random_seed:list,
-    start:list,
+    chains: int,
+    cores: int,
+    chain: int,
+    random_seed: list,
+    start: list,
     progressbar=True,
     trace=None,
     model=None,
@@ -1520,9 +1521,9 @@ def sample_posterior_predictive(
 
     Parameters
     ----------
-    trace: backend, list, or MultiTrace
-        Trace generated from MCMC sampling. Or a list containing dicts from
-        find_MAP() or points
+    trace: backend, list, xarray.Dataset, or MultiTrace
+        Trace generated from MCMC sampling, or a list of dicts (eg. points or from find_MAP()),
+        or xarray.Dataset (eg. InferenceData.posterior or InferenceData.prior)
     samples: int
         Number of posterior predictive samples to generate. Defaults to one posterior predictive
         sample per posterior sample, that is, the number of draws times the number of chains. It
@@ -1556,6 +1557,9 @@ def sample_posterior_predictive(
         Dictionary with the variable names as keys, and values numpy arrays containing
         posterior predictive samples.
     """
+    if isinstance(trace, xarray.Dataset):
+        trace = dataset_to_point_dict(trace)
+
     len_trace = len(trace)
     try:
         nchain = trace.nchains
@@ -1563,12 +1567,18 @@ def sample_posterior_predictive(
         nchain = 1
 
     if keep_size and samples is not None:
-        raise IncorrectArgumentsError("Should not specify both keep_size and samples argukments")
+        raise IncorrectArgumentsError("Should not specify both keep_size and samples arguments")
     if keep_size and size is not None:
-        raise IncorrectArgumentsError("Should not specify both keep_size and size argukments")
+        raise IncorrectArgumentsError("Should not specify both keep_size and size arguments")
 
     if samples is None:
-        samples = sum(len(v) for v in trace._straces.values())
+        if isinstance(trace, MultiTrace):
+            samples = sum(len(v) for v in trace._straces.values())
+        elif isinstance(trace, list) and all((isinstance(x, dict) for x in trace)):
+            # this is a list of points
+            samples = len(trace)
+        else:
+            raise ValueError("Do not know how to compute number of samples for trace argument of type %s"%type(trace))
 
     if samples < len_trace * nchain:
         warnings.warn(
@@ -1853,13 +1863,11 @@ def init_nuts(
         * advi: Run ADVI to estimate posterior mean and diagonal mass matrix.
         * advi_map: Initialize ADVI with MAP and use MAP as starting point.
         * map: Use the MAP as starting point. This is discouraged.
-        * nuts: Run NUTS and estimate posterior mean and mass matrix from
-          the trace.
+        * adapt_full: Adapt a dense mass matrix using the sample covariances
     chains: int
         Number of jobs to start.
     n_init: int
-        Number of iterations of initializer
-        If 'ADVI', number of iterations, if 'nuts', number of draws.
+        Number of iterations of initializer. Only works for 'ADVI' init methods.
     model: Model (optional if in ``with`` context)
     progressbar: bool
         Whether or not to display a progressbar for advi sampling.
@@ -1988,13 +1996,11 @@ def init_nuts(
         cov = pm.find_hessian(point=start)
         start = [start] * chains
         potential = quadpotential.QuadPotentialFull(cov)
-    elif init == "nuts":
-        init_trace = pm.sample(
-            draws=n_init, step=pm.NUTS(), tune=n_init // 2, random_seed=random_seed
-        )
-        cov = np.atleast_1d(pm.trace_cov(init_trace))
-        start = list(np.random.choice(init_trace, chains))
-        potential = quadpotential.QuadPotentialFull(cov)
+    elif init == "adapt_full":
+        start = [model.test_point] * chains
+        mean = np.mean([model.dict_to_array(vals) for vals in start], axis=0)
+        cov = np.ones((model.ndim, model.ndim))
+        potential = quadpotential.QuadPotentialFullAdapt(model.ndim, mean, cov, 10)
     else:
         raise ValueError("Unknown initializer: {}.".format(init))
 
