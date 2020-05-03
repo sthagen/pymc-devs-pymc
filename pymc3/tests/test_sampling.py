@@ -103,7 +103,7 @@ class TestSample(SeededTest):
             assert "'foo'" in str(excinfo.value)
 
             with pytest.raises(ValueError) as excinfo:
-                pm.sample(50, tune=0, init=None, step_kwargs={"foo": {}})
+                pm.sample(50, tune=0, init=None, foo={})
             assert "foo" in str(excinfo.value)
 
             with pytest.raises(ValueError) as excinfo:
@@ -675,6 +675,8 @@ class TestSamplePPCW(SeededTest):
         "advi+adapt_diag_grad",
         "map",
         "advi_map",
+        "adapt_full",
+        "jitter+adapt_full",
     ],
 )
 def test_exec_nuts_init(method):

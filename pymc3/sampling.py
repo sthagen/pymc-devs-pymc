@@ -368,36 +368,9 @@ def sample(
     """
     model = modelcontext(model)
 
-    nuts_kwargs = kwargs.pop("nuts_kwargs", None)
-    if nuts_kwargs is not None:
-        warnings.warn(
-            "The nuts_kwargs argument has been deprecated. Pass step "
-            "method arguments directly to sample instead",
-            DeprecationWarning,
-        )
-        kwargs.update(nuts_kwargs)
-    step_kwargs = kwargs.pop("step_kwargs", None)
-    if step_kwargs is not None:
-        warnings.warn(
-            "The step_kwargs argument has been deprecated. Pass step "
-            "method arguments directly to sample instead",
-            DeprecationWarning,
-        )
-        kwargs.update(step_kwargs)
-
     if cores is None:
         cores = min(4, _cpu_count())
 
-    if "njobs" in kwargs:
-        cores = kwargs["njobs"]
-        warnings.warn(
-            "The njobs argument has been deprecated. Use cores instead.", DeprecationWarning
-        )
-    if "nchains" in kwargs:
-        chains = kwargs["nchains"]
-        warnings.warn(
-            "The nchains argument has been deprecated. Use chains instead.", DeprecationWarning
-        )
     if chains is None:
         chains = max(2, cores)
     if isinstance(start, dict):
@@ -412,11 +385,6 @@ def sample(
         random_seed = [np.random.randint(2 ** 30) for _ in range(chains)]
     if not isinstance(random_seed, Iterable):
         raise TypeError("Invalid value for `random_seed`. Must be tuple, list or int")
-    if "chain" in kwargs:
-        chain_idx = kwargs["chain"]
-        warnings.warn(
-            "The chain argument has been deprecated. Use chain_idx instead.", DeprecationWarning
-        )
 
     if start is not None:
         for start_vals in start:
@@ -912,6 +880,7 @@ def _iter_sample(
             step.reset_tuning()
         for i in range(draws):
             stats = None
+            diverging = False
 
             if i == 0 and hasattr(step, "iter_count"):
                 step.iter_count = 0
@@ -927,7 +896,6 @@ def _iter_sample(
             else:
                 point = step.step(point)
                 strace.record(point)
-                diverging = False
             if callback is not None:
                 warns = getattr(step, "warnings", None)
                 callback(trace=strace, draw=Draw(chain, i == draws, i, i < tune, stats, point, warns))
@@ -1853,8 +1821,8 @@ def init_nuts(
         * adapt_diag: Start with a identity mass matrix and then adapt a diagonal based on the
           variance of the tuning samples. All chains use the test value (usually the prior mean)
           as starting point.
-        * jitter+adapt_diag: Same as ``adapt_diag``, but use uniform jitter in [-1, 1] as starting
-          point in each chain.
+        * jitter+adapt_diag: Same as ``adapt_diag``, but use test value plus a uniform jitter in
+          [-1, 1] as starting point in each chain.
         * advi+adapt_diag: Run ADVI and then adapt the resulting diagonal mass matrix based on the
           sample variance of the tuning samples.
         * advi+adapt_diag_grad: Run ADVI and then adapt the resulting diagonal mass matrix based
@@ -1863,7 +1831,10 @@ def init_nuts(
         * advi: Run ADVI to estimate posterior mean and diagonal mass matrix.
         * advi_map: Initialize ADVI with MAP and use MAP as starting point.
         * map: Use the MAP as starting point. This is discouraged.
-        * adapt_full: Adapt a dense mass matrix using the sample covariances
+        * adapt_full: Adapt a dense mass matrix using the sample covariances. All chains use the
+          test value (usually the prior mean) as starting point.
+        * jitter+adapt_full: Same as ``adapt_full`, but use test value plus a uniform jitter in
+          [-1, 1] as starting point in each chain.
     chains: int
         Number of jobs to start.
     n_init: int
@@ -1999,7 +1970,17 @@ def init_nuts(
     elif init == "adapt_full":
         start = [model.test_point] * chains
         mean = np.mean([model.dict_to_array(vals) for vals in start], axis=0)
-        cov = np.ones((model.ndim, model.ndim))
+        cov = np.eye(model.ndim)
+        potential = quadpotential.QuadPotentialFullAdapt(model.ndim, mean, cov, 10)
+    elif init == 'jitter+adapt_full':
+        start = []
+        for _ in range(chains):
+            mean = {var: val.copy() for var, val in model.test_point.items()}
+            for val in mean.values():
+                val[...] += 2 * np.random.rand(*val.shape) - 1
+            start.append(mean)
+        mean = np.mean([model.dict_to_array(vals) for vals in start], axis=0)
+        cov = np.eye(model.ndim)
         potential = quadpotential.QuadPotentialFullAdapt(model.ndim, mean, cov, 10)
     else:
         raise ValueError("Unknown initializer: {}.".format(init))
