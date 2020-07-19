@@ -13,6 +13,7 @@
 #   limitations under the License.
 
 from itertools import combinations
+import packaging
 from typing import Tuple
 import numpy as np
 
@@ -144,6 +145,15 @@ class TestSample(SeededTest):
             trace = pm.sample(draws=100, tune=50, cores=4)
             assert len(trace) == 100
 
+    def test_reset_tuning(self):
+        with self.model:
+            tune = 50
+            chains = 2
+            start, step = pm.sampling.init_nuts(chains=chains)
+            pm.sample(draws=2, tune=tune, chains=chains, step=step, start=start, cores=1)
+            assert step.potential._n_samples == tune
+            assert step.step_adapt._count == tune + 1
+
     @pytest.mark.parametrize("step_cls", [pm.NUTS, pm.Metropolis, pm.Slice])
     @pytest.mark.parametrize("discard", [True, False])
     def test_trace_report(self, step_cls, discard):
@@ -158,6 +168,38 @@ class TestSample(SeededTest):
             assert trace.report.n_tune == 50
             assert trace.report.n_draws == 100
             assert isinstance(trace.report.t_sampling, float)
+        pass
+
+    def test_return_inferencedata(self):
+        with self.model:
+            kwargs = dict(
+                draws=100, tune=50, cores=1,
+                chains=2, step=pm.Metropolis()
+            )
+            v = packaging.version.parse(pm.__version__)
+            if v.major > 3 or v.minor >= 10:
+                with pytest.warns(FutureWarning, match="pass return_inferencedata"):
+                    result = pm.sample(**kwargs)
+
+            # trace with tuning
+            with pytest.warns(UserWarning, match="will be included"):
+                result = pm.sample(**kwargs, return_inferencedata=False, discard_tuned_samples=False)
+            assert isinstance(result, pm.backends.base.MultiTrace)
+            assert len(result) == 150
+
+            # inferencedata with tuning
+            result = pm.sample(**kwargs, return_inferencedata=True, discard_tuned_samples=False)
+            assert isinstance(result, az.InferenceData)
+            assert result.posterior.sizes["draw"] == 100
+            assert result.posterior.sizes["chain"] == 2
+            assert len(result._groups_warmup) > 0
+
+            # inferencedata without tuning
+            result = pm.sample(**kwargs, return_inferencedata=True, discard_tuned_samples=True)
+            assert isinstance(result, az.InferenceData)
+            assert result.posterior.sizes["draw"] == 100
+            assert result.posterior.sizes["chain"] == 2
+            assert len(result._groups_warmup) == 0
         pass
 
     @pytest.mark.parametrize('cores', [1, 2])
@@ -339,6 +381,13 @@ class TestSamplePPC(SeededTest):
             ppc = pm.fast_sample_posterior_predictive(trace, keep_size=True)
             assert ppc["a"].shape == (nchains, ndraws)
 
+            # test keep_size parameter and idata input
+            idata = az.from_pymc3(trace)
+            ppc = pm.sample_posterior_predictive(idata, keep_size=True)
+            assert ppc["a"].shape == (nchains, ndraws)
+            ppc = pm.fast_sample_posterior_predictive(trace, keep_size=True)
+            assert ppc["a"].shape == (nchains, ndraws)
+
             # test default case
             ppc = pm.sample_posterior_predictive(trace, var_names=["a"])
             assert "a" in ppc
@@ -386,8 +435,25 @@ class TestSamplePPC(SeededTest):
             assert "a" in ppc
             assert ppc["a"].shape == (12, 2)
 
+            # test keep_size parameter with inference data as input...
+            idata = az.from_pymc3(trace)
+            ppc = pm.sample_posterior_predictive(idata, keep_size=True)
+            assert ppc["a"].shape == (trace.nchains, len(trace), 2)
+            with pytest.warns(UserWarning):
+                ppc = pm.sample_posterior_predictive(trace, samples=12, var_names=["a"])
+            assert "a" in ppc
+            assert ppc["a"].shape == (12, 2)
+
             # test keep_size parameter
             ppc = pm.fast_sample_posterior_predictive(trace, keep_size=True)
+            assert ppc["a"].shape == (trace.nchains, len(trace), 2)
+            with pytest.warns(UserWarning):
+                ppc = pm.fast_sample_posterior_predictive(trace, samples=12, var_names=["a"])
+            assert "a" in ppc
+            assert ppc["a"].shape == (12, 2)
+
+            # test keep_size parameter with inference data as input
+            ppc = pm.fast_sample_posterior_predictive(idata, keep_size=True)
             assert ppc["a"].shape == (trace.nchains, len(trace), 2)
             with pytest.warns(UserWarning):
                 ppc = pm.fast_sample_posterior_predictive(trace, samples=12, var_names=["a"])
@@ -417,6 +483,12 @@ class TestSamplePPC(SeededTest):
                 ppc = pm.sample_posterior_predictive(trace, size=4, keep_size=True)
             with pytest.raises(IncorrectArgumentsError):
                 ppc = pm.sample_posterior_predictive(trace, vars=[a], var_names=["a"])
+            # test wrong type argument
+            bad_trace = {'mu': stats.norm.rvs(size=1000)}
+            with pytest.raises(TypeError):
+                ppc = pm.sample_posterior_predictive(bad_trace)
+            with pytest.raises(TypeError):
+                ppc = pm.fast_sample_posterior_predictive(bad_trace)
 
     def test_vector_observed(self):
         with pm.Model() as model:
@@ -512,9 +584,7 @@ class TestSamplePPC(SeededTest):
 
         samples = 100
         with model:
-            post_pred = pm.sample_posterior_predictive(
-                trace, samples=samples, var_names=["p", "obs"]
-            )
+            post_pred = pm.sample_posterior_predictive(trace, samples=samples, var_names=["p", "obs"])
 
         expected_p = np.array(
             [logistic.eval({coeff: val}) for val in trace["x"][:samples]]

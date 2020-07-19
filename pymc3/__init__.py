@@ -13,9 +13,11 @@
 #   limitations under the License.
 
 # pylint: disable=wildcard-import
-__version__ = "3.8"
+__version__ = "3.9.2"
 
 import logging
+import multiprocessing as mp
+import platform
 
 _log = logging.getLogger("pymc3")
 
@@ -28,7 +30,6 @@ if not logging.root.handlers:
 
 def __set_compiler_flags():
     # Workarounds for Theano compiler problems on various platforms
-    import platform
     import theano
 
     system = platform.system()
