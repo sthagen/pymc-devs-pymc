@@ -5,7 +5,7 @@ channels:
 dependencies:
   - python=3.6
   - arviz>=0.9
-  - theano>=1.0.5
+  - theano-pymc>=1.0.5
   - numpy>=1.13
   - scipy>=0.18
   - pandas >=0.18
@@ -36,5 +36,8 @@ dependencies:
   - ipywidgets
   - dataclasses  # python_version < 3.7
   - contextvars  # python_version < 3.7
+  - mkl-service
+  - dill
+  - libblas=*=*mkl
   - pip:
     - black_nbconvert
