@@ -1,28 +1,61 @@
+exclude: ^(docs/logos|pymc3/tests/data)/
 repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
-  rev: v3.2.0
+  rev: v3.4.0
   hooks:
-    -   id: end-of-file-fixer
+    -   id: check-merge-conflict
     -   id: check-toml
-- repo: https://github.com/nbQA-dev/nbQA
-  rev: 0.3.2
+    -   id: check-yaml
+    -   id: debug-statements
+    -   id: end-of-file-fixer
+    -   id: no-commit-to-branch
+        args: [--branch, master]
+    -   id: requirements-txt-fixer
+        exclude: ^requirements-dev\.txt$
+    -   id: trailing-whitespace
+- repo: https://github.com/PyCQA/isort
+  rev: 5.7.0
   hooks:
-    - id: nbqa-black
-    - id: nbqa-isort
-    - id: nbqa-pyupgrade
+    - id: isort
+      name: isort
 - repo: https://github.com/asottile/pyupgrade
-  rev: v2.7.2
+  rev: v2.7.4
   hooks:
     - id: pyupgrade
-      args: [--py36-plus]
+      args: [--py37-plus]
 - repo: https://github.com/psf/black
   rev: 20.8b1
   hooks:
     - id: black
+- repo: https://github.com/PyCQA/pylint
+  rev: pylint-2.6.0
+  hooks:
+    - id: pylint
+      args: [--rcfile=.pylintrc]
+      files: ^pymc3/
 - repo: local
   hooks:
-    - id: watermark
-      name: Check notebooks have watermark
-      types: [jupyter]
-      entry: python scripts/check_watermark.py
+    - id: check-no-tests-are-ignored
+      entry: python scripts/check_all_tests_are_covered.py
+      files: ^\.github/workflows/pytest\.yml$
       language: python
+      name: Check no tests are ignored
+      pass_filenames: false
+    - id: conda-env-sort
+      additional_dependencies: [pyyaml]
+      entry: python scripts/sort_conda_envs.py
+      files: ^conda-envs/environment-dev-py37\.yml$
+      language: python
+      name: Sort dependencies in conda envs
+      types: [yaml]
+    - id: pip-from-conda
+      additional_dependencies: [pyyaml]
+      entry: python scripts/generate_pip_deps_from_conda.py
+      files: ^conda-envs/
+      language: python
+      name: Generate pip dependency from conda
+    - id: no-relative-imports
+      name: No relative imports
+      entry: from \.[\.\w]* import
+      types: [python]
+      language: pygrep

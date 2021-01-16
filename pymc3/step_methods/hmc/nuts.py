@@ -16,14 +16,14 @@ from collections import namedtuple
 
 import numpy as np
 
-from ..arraystep import Competence
-from .base_hmc import BaseHMC, HMCStepData, DivergenceInfo
-from .integration import IntegrationError
 from pymc3.backends.report import SamplerWarning, WarningType
+from pymc3.distributions import BART
 from pymc3.math import logbern, logdiffexp_numpy
+from pymc3.step_methods.arraystep import Competence
+from pymc3.step_methods.hmc.base_hmc import BaseHMC, DivergenceInfo, HMCStepData
+from pymc3.step_methods.hmc.integration import IntegrationError
 from pymc3.theanof import floatX
 from pymc3.vartypes import continuous_types
-
 
 __all__ = ["NUTS"]
 
@@ -196,7 +196,7 @@ class NUTS(BaseHMC):
     @staticmethod
     def competence(var, has_grad):
         """Check how appropriate this class is for sampling a random variable."""
-        if var.dtype in continuous_types and has_grad:
+        if var.dtype in continuous_types and has_grad and not isinstance(var.distribution, BART):
             return Competence.IDEAL
         return Competence.INCOMPATIBLE
 

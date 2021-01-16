@@ -15,84 +15,93 @@
 import itertools
 import sys
 
-from .helpers import SeededTest, select_by_precision
-from ..vartypes import continuous_types
-from ..model import Model, Point, Deterministic
-from ..blocking import DictToVarBijection
-from ..distributions import (
-    DensityDist,
-    Categorical,
-    Multinomial,
-    VonMises,
-    Dirichlet,
-    MvStudentT,
-    MvNormal,
-    MatrixNormal,
-    ZeroInflatedPoisson,
-    ZeroInflatedNegativeBinomial,
-    Constant,
-    Poisson,
+import numpy as np
+import numpy.random as nr
+import pytest
+import scipy.stats
+import scipy.stats.distributions as sp
+import theano
+import theano.tensor as tt
+
+from numpy import array, exp, inf, log
+from numpy.testing import assert_allclose, assert_almost_equal, assert_equal
+from packaging.version import parse
+from scipy import __version__ as scipy_version
+from scipy import integrate
+from scipy.special import erf, logit
+
+import pymc3 as pm
+
+from pymc3.blocking import DictToVarBijection
+from pymc3.distributions import (
+    AR1,
+    AsymmetricLaplace,
     Bernoulli,
     Beta,
     BetaBinomial,
-    HalfStudentT,
-    StudentT,
-    Weibull,
-    Pareto,
-    InverseGamma,
-    Gamma,
-    Cauchy,
-    HalfCauchy,
-    Lognormal,
-    Laplace,
-    NegativeBinomial,
-    Geometric,
-    Exponential,
-    ExGaussian,
-    Normal,
-    TruncatedNormal,
-    Flat,
-    LKJCorr,
-    Wald,
-    ChiSquared,
-    HalfNormal,
-    DiscreteUniform,
-    Bound,
-    Uniform,
-    Triangular,
     Binomial,
-    SkewNormal,
+    Bound,
+    Categorical,
+    Cauchy,
+    ChiSquared,
+    Constant,
+    DensityDist,
+    Dirichlet,
+    DirichletMultinomial,
+    DiscreteUniform,
     DiscreteWeibull,
+    ExGaussian,
+    Exponential,
+    Flat,
+    Gamma,
+    Geometric,
     Gumbel,
-    Logistic,
-    OrderedLogistic,
-    LogitNormal,
-    Interpolated,
-    ZeroInflatedBinomial,
+    HalfCauchy,
     HalfFlat,
-    AR1,
+    HalfNormal,
+    HalfStudentT,
+    HyperGeometric,
+    Interpolated,
+    InverseGamma,
     KroneckerNormal,
-    Rice,
     Kumaraswamy,
+    Laplace,
+    LKJCorr,
+    Logistic,
+    LogitNormal,
+    Lognormal,
+    MatrixNormal,
     Moyal,
+    Multinomial,
+    MvNormal,
+    MvStudentT,
+    NegativeBinomial,
+    Normal,
+    OrderedLogistic,
+    OrderedProbit,
+    Pareto,
+    Poisson,
+    Rice,
+    SkewNormal,
+    StudentT,
+    Triangular,
+    TruncatedNormal,
+    Uniform,
+    VonMises,
+    Wald,
+    Weibull,
+    ZeroInflatedBinomial,
+    ZeroInflatedNegativeBinomial,
+    ZeroInflatedPoisson,
+    continuous,
 )
-
-from ..distributions import continuous
+from pymc3.math import kronecker, logsumexp
+from pymc3.model import Deterministic, Model, Point
+from pymc3.tests.helpers import SeededTest, select_by_precision
 from pymc3.theanof import floatX
-import pymc3 as pm
-from numpy import array, inf, log, exp
-from numpy.testing import assert_almost_equal, assert_allclose, assert_equal
-import numpy.random as nr
-import numpy as np
-import pytest
+from pymc3.vartypes import continuous_types
 
-from scipy import integrate
-import scipy.stats.distributions as sp
-import scipy.stats
-from scipy.special import logit
-import theano
-import theano.tensor as tt
-from ..math import kronecker
+SCIPY_VERSION = parse(scipy_version)
 
 
 def get_lkj_cases():
@@ -174,7 +183,7 @@ def product(domains, n_samples=-1):
     try:
         names, domains = zip(*domains.items())
     except ValueError:  # domains.items() is empty
-        return []
+        return [{}]
     all_vals = [zip(names, val) for val in itertools.product(*[d.vals for d in domains])]
     if n_samples > 0 and len(all_vals) > n_samples:
         return (all_vals[j] for j in nr.choice(len(all_vals), n_samples, replace=False))
@@ -214,6 +223,14 @@ def build_model(distfam, valuedomain, vardomains, extra_args=None):
         vals.update(extra_args)
         distfam("value", shape=valuedomain.shape, transform=None, **vals)
     return m
+
+
+def laplace_asymmetric_logpdf(value, kappa, b, mu):
+    kapinv = 1 / kappa
+    value = value - mu
+    lPx = value * b * np.where(value >= 0, -kappa, kapinv)
+    lPx += np.log(b / (kappa + kapinv))
+    return lPx
 
 
 def integrate_nd(f, domain, shape, dtype):
@@ -258,6 +275,21 @@ def multinomial_logpdf(value, n, p):
         logpdf -= scipy.special.gammaln(value + 1).sum()
         logpdf += logpow(p, value).sum()
         return logpdf
+    else:
+        return -inf
+
+
+def dirichlet_multinomial_logpmf(value, n, a):
+    value, n, a = [np.asarray(x) for x in [value, n, a]]
+    assert value.ndim == 1
+    assert n.ndim == 0
+    assert a.shape == value.shape
+    gammaln = scipy.special.gammaln
+    if value.sum() == n and (0 <= value).all() and (value <= n).all():
+        sum_a = a.sum(axis=-1)
+        const = gammaln(n + 1) + gammaln(sum_a) - gammaln(n + sum_a)
+        series = gammaln(value + a) - gammaln(value + 1) - gammaln(a)
+        return const + series.sum(axis=-1)
     else:
         return -inf
 
@@ -429,6 +461,17 @@ def orderedlogistic_logpdf(value, eta, cutpoints):
     return np.where(np.all(ps >= 0), np.log(p), -np.inf)
 
 
+def invprobit(x):
+    return (erf(x / np.sqrt(2)) + 1) / 2
+
+
+def orderedprobit_logpdf(value, eta, cutpoints):
+    c = np.concatenate(([-np.inf], cutpoints, [np.inf]))
+    ps = np.array([invprobit(eta - cc) - invprobit(eta - cc1) for cc, cc1 in zip(c[:-1], c[1:])])
+    p = ps[value]
+    return np.where(np.all(ps >= 0), np.log(p), -np.inf)
+
+
 class Simplex:
     def __init__(self, n):
         self.vals = list(simplex_values(n))
@@ -561,6 +604,57 @@ class TestMatchesScipy(SeededTest):
                 err_msg=str(pt),
             )
 
+        # Test that values below domain evaluate to -np.inf
+        if np.isfinite(domain.lower):
+            below_domain = domain.lower - 1
+            assert_equal(
+                dist.logcdf(below_domain).tag.test_value,
+                -np.inf,
+                err_msg=str(below_domain),
+            )
+
+        # Test that values above domain evaluate to 0
+        # Natural domains do not have inf as the upper edge, but should also be ignored
+        not_nat_domain = domain not in (NatSmall, Nat, NatBig, PosNat)
+        if not_nat_domain and np.isfinite(domain.upper):
+            above_domain = domain.upper + 1
+            assert_equal(
+                dist.logcdf(above_domain).tag.test_value,
+                0,
+                err_msg=str(above_domain),
+            )
+
+        # Test that method works with multiple values or raises informative TypeError
+        try:
+            dist.logcdf(np.array([value, value])).tag.test_value
+        except TypeError as err:
+            if not str(err).endswith(
+                ".logcdf expects a scalar value but received a 1-dimensional object."
+            ):
+                raise
+
+    def check_selfconsistency_discrete_logcdf(
+        self, distribution, domain, paramdomains, decimal=None, n_samples=100
+    ):
+        """
+        Check that logcdf of discrete distributions matches sum of logps up to value
+        """
+        domains = paramdomains.copy()
+        domains["value"] = domain
+        if decimal is None:
+            decimal = select_by_precision(float64=6, float32=3)
+        for pt in product(domains, n_samples=n_samples):
+            params = dict(pt)
+            value = params.pop("value")
+            values = np.arange(domain.lower, value + 1)
+            dist = distribution.dist(**params)
+            assert_almost_equal(
+                dist.logcdf(value).tag.test_value,
+                logsumexp(dist.logp(values), keepdims=False).tag.test_value,
+                decimal=decimal,
+                err_msg=str(pt),
+            )
+
     def check_int_to_1(self, model, value, domain, paramdomains):
         pdf = model.fastfn(exp(model.logpt))
         for pt in product(paramdomains, n_samples=10):
@@ -628,13 +722,24 @@ class TestMatchesScipy(SeededTest):
             {"lower": -Rplusdunif, "upper": Rplusdunif},
             lambda value, lower, upper: sp.randint.logpmf(value, lower, upper + 1),
         )
+        self.check_logcdf(
+            DiscreteUniform,
+            Rdunif,
+            {"lower": -Rplusdunif, "upper": Rplusdunif},
+            lambda value, lower, upper: sp.randint.logcdf(value, lower, upper + 1),
+        )
+        self.check_selfconsistency_discrete_logcdf(
+            DiscreteUniform,
+            Rdunif,
+            {"lower": -Rplusdunif, "upper": Rplusdunif},
+        )
 
     def test_flat(self):
         self.pymc3_matches_scipy(Flat, Runif, {}, lambda value: 0)
         with Model():
             x = Flat("a")
             assert_allclose(x.tag.test_value, 0)
-        self.check_logcdf(Flat, Runif, {}, lambda value: np.log(0.5))
+        self.check_logcdf(Flat, R, {}, lambda value: np.log(0.5))
         # Check infinite cases individually.
         assert 0.0 == Flat.dist().logcdf(np.inf).tag.test_value
         assert -np.inf == Flat.dist().logcdf(-np.inf).tag.test_value
@@ -645,7 +750,7 @@ class TestMatchesScipy(SeededTest):
             x = HalfFlat("a", shape=2)
             assert_allclose(x.tag.test_value, 1)
             assert x.tag.test_value.shape == (2,)
-        self.check_logcdf(HalfFlat, Runif, {}, lambda value: -np.inf)
+        self.check_logcdf(HalfFlat, Rplus, {}, lambda value: -np.inf)
         # Check infinite cases individually.
         assert 0.0 == HalfFlat.dist().logcdf(np.inf).tag.test_value
         assert -np.inf == HalfFlat.dist().logcdf(-np.inf).tag.test_value
@@ -787,19 +892,94 @@ class TestMatchesScipy(SeededTest):
 
     def test_geometric(self):
         self.pymc3_matches_scipy(
-            Geometric, Nat, {"p": Unit}, lambda value, p: np.log(sp.geom.pmf(value, p))
+            Geometric,
+            Nat,
+            {"p": Unit},
+            lambda value, p: np.log(sp.geom.pmf(value, p)),
+        )
+        self.check_logcdf(
+            Geometric,
+            Nat,
+            {"p": Unit},
+            lambda value, p: sp.geom.logcdf(value, p),
+        )
+        self.check_selfconsistency_discrete_logcdf(
+            Geometric,
+            Nat,
+            {"p": Unit},
+        )
+
+    def test_hypergeometric(self):
+        def modified_scipy_hypergeom_logpmf(value, N, k, n):
+            # Convert nan to -np.inf
+            original_res = sp.hypergeom.logpmf(value, N, k, n)
+            return original_res if not np.isnan(original_res) else -np.inf
+
+        def modified_scipy_hypergeom_logcdf(value, N, k, n):
+            # Convert nan to -np.inf
+            original_res = sp.hypergeom.logcdf(value, N, k, n)
+
+            # Correct for scipy bug in logcdf method (see https://github.com/scipy/scipy/issues/13280)
+            if not np.isnan(original_res):
+                pmfs = sp.hypergeom.logpmf(np.arange(value + 1), N, k, n)
+                if np.all(np.isnan(pmfs)):
+                    original_res = np.nan
+
+            return original_res if not np.isnan(original_res) else -np.inf
+
+        self.pymc3_matches_scipy(
+            HyperGeometric,
+            Nat,
+            {"N": NatSmall, "k": NatSmall, "n": NatSmall},
+            modified_scipy_hypergeom_logpmf,
+        )
+        self.check_logcdf(
+            HyperGeometric,
+            Nat,
+            {"N": NatSmall, "k": NatSmall, "n": NatSmall},
+            modified_scipy_hypergeom_logcdf,
+        )
+        self.check_selfconsistency_discrete_logcdf(
+            HyperGeometric,
+            Nat,
+            {"N": NatSmall, "k": NatSmall, "n": NatSmall},
         )
 
     def test_negative_binomial(self):
-        def test_fun(value, mu, alpha):
+        def scipy_mu_alpha_logpmf(value, mu, alpha):
             return sp.nbinom.logpmf(value, alpha, 1 - mu / (mu + alpha))
 
-        self.pymc3_matches_scipy(NegativeBinomial, Nat, {"mu": Rplus, "alpha": Rplus}, test_fun)
+        def scipy_mu_alpha_logcdf(value, mu, alpha):
+            return sp.nbinom.logcdf(value, alpha, 1 - mu / (mu + alpha))
+
+        self.pymc3_matches_scipy(
+            NegativeBinomial,
+            Nat,
+            {"mu": Rplus, "alpha": Rplus},
+            scipy_mu_alpha_logpmf,
+        )
         self.pymc3_matches_scipy(
             NegativeBinomial,
             Nat,
             {"p": Unit, "n": Rplus},
             lambda value, p, n: sp.nbinom.logpmf(value, n, p),
+        )
+        self.check_logcdf(
+            NegativeBinomial,
+            Nat,
+            {"mu": Rplus, "alpha": Rplus},
+            scipy_mu_alpha_logcdf,
+        )
+        self.check_logcdf(
+            NegativeBinomial,
+            Nat,
+            {"p": Unit, "n": Rplus},
+            lambda value, p, n: sp.nbinom.logcdf(value, n, p),
+        )
+        self.check_selfconsistency_discrete_logcdf(
+            NegativeBinomial,
+            Nat,
+            {"mu": Rplus, "alpha": Rplus},
         )
 
     @pytest.mark.parametrize(
@@ -834,6 +1014,14 @@ class TestMatchesScipy(SeededTest):
             R,
             {"mu": R, "b": Rplus},
             lambda value, mu, b: sp.laplace.logcdf(value, mu, b),
+        )
+
+    def test_laplace_asymmetric(self):
+        self.pymc3_matches_scipy(
+            AsymmetricLaplace,
+            R,
+            {"b": Rplus, "kappa": Rplus, "mu": R},
+            laplace_asymmetric_logpdf,
         )
 
     def test_lognormal(self):
@@ -913,12 +1101,22 @@ class TestMatchesScipy(SeededTest):
             lambda value, alpha, beta: sp.gamma.logcdf(value, alpha, scale=1.0 / beta),
         )
 
+    @pytest.mark.xfail(
+        condition=(theano.config.floatX == "float32"),
+        reason="Fails on float32 due to numerical issues",
+    )
     def test_inverse_gamma(self):
         self.pymc3_matches_scipy(
             InverseGamma,
             Rplus,
             {"alpha": Rplus, "beta": Rplus},
             lambda value, alpha, beta: sp.invgamma.logpdf(value, alpha, scale=beta),
+        )
+        self.check_logcdf(
+            InverseGamma,
+            Rplus,
+            {"alpha": Rplus, "beta": Rplus},
+            lambda value, alpha, beta: sp.invgamma.logcdf(value, alpha, scale=beta),
         )
 
     @pytest.mark.xfail(
@@ -988,11 +1186,46 @@ class TestMatchesScipy(SeededTest):
             {"n": NatSmall, "p": Unit},
             lambda value, n, p: sp.binom.logpmf(value, n, p),
         )
+        self.check_logcdf(
+            Binomial,
+            Nat,
+            {"n": NatSmall, "p": Unit},
+            lambda value, n, p: sp.binom.logcdf(value, n, p),
+        )
+        self.check_selfconsistency_discrete_logcdf(
+            Binomial,
+            Nat,
+            {"n": NatSmall, "p": Unit},
+        )
 
     # Too lazy to propagate decimal parameter through the whole chain of deps
     @pytest.mark.xfail(condition=(theano.config.floatX == "float32"), reason="Fails on float32")
+    @pytest.mark.xfail(
+        condition=(SCIPY_VERSION < parse("1.4.0")), reason="betabinom is new in Scipy 1.4.0"
+    )
     def test_beta_binomial(self):
-        self.checkd(BetaBinomial, Nat, {"alpha": Rplus, "beta": Rplus, "n": NatSmall})
+        self.checkd(
+            BetaBinomial,
+            Nat,
+            {"alpha": Rplus, "beta": Rplus, "n": NatSmall},
+        )
+        self.pymc3_matches_scipy(
+            BetaBinomial,
+            Nat,
+            {"alpha": Rplus, "beta": Rplus, "n": NatSmall},
+            lambda value, alpha, beta, n: sp.betabinom.logpmf(value, a=alpha, b=beta, n=n),
+        )
+        self.check_logcdf(
+            BetaBinomial,
+            Nat,
+            {"alpha": Rplus, "beta": Rplus, "n": NatSmall},
+            lambda value, alpha, beta, n: sp.betabinom.logcdf(value, a=alpha, b=beta, n=n),
+        )
+        self.check_selfconsistency_discrete_logcdf(
+            BetaBinomial,
+            Nat,
+            {"alpha": Rplus, "beta": Rplus, "n": NatSmall},
+        )
 
     def test_bernoulli(self):
         self.pymc3_matches_scipy(
@@ -1002,7 +1235,27 @@ class TestMatchesScipy(SeededTest):
             lambda value, logit_p: sp.bernoulli.logpmf(value, scipy.special.expit(logit_p)),
         )
         self.pymc3_matches_scipy(
-            Bernoulli, Bool, {"p": Unit}, lambda value, p: sp.bernoulli.logpmf(value, p)
+            Bernoulli,
+            Bool,
+            {"p": Unit},
+            lambda value, p: sp.bernoulli.logpmf(value, p),
+        )
+        self.check_logcdf(
+            Bernoulli,
+            Bool,
+            {"p": Unit},
+            lambda value, p: sp.bernoulli.logcdf(value, p),
+        )
+        self.check_logcdf(
+            Bernoulli,
+            Bool,
+            {"logit_p": R},
+            lambda value, logit_p: sp.bernoulli.logcdf(value, scipy.special.expit(logit_p)),
+        )
+        self.check_selfconsistency_discrete_logcdf(
+            Bernoulli,
+            Bool,
+            {"p": Unit},
         )
 
     def test_discrete_weibull(self):
@@ -1012,10 +1265,29 @@ class TestMatchesScipy(SeededTest):
             {"q": Unit, "beta": Rplusdunif},
             discrete_weibull_logpmf,
         )
+        self.check_selfconsistency_discrete_logcdf(
+            DiscreteWeibull,
+            Nat,
+            {"q": Unit, "beta": Rplusdunif},
+        )
 
     def test_poisson(self):
         self.pymc3_matches_scipy(
-            Poisson, Nat, {"mu": Rplus}, lambda value, mu: sp.poisson.logpmf(value, mu)
+            Poisson,
+            Nat,
+            {"mu": Rplus},
+            lambda value, mu: sp.poisson.logpmf(value, mu),
+        )
+        self.check_logcdf(
+            Poisson,
+            Nat,
+            {"mu": Rplus},
+            lambda value, mu: sp.poisson.logcdf(value, mu),
+        )
+        self.check_selfconsistency_discrete_logcdf(
+            Poisson,
+            Nat,
+            {"mu": Rplus},
         )
 
     def test_bound_poisson(self):
@@ -1037,7 +1309,16 @@ class TestMatchesScipy(SeededTest):
     # Too lazy to propagate decimal parameter through the whole chain of deps
     @pytest.mark.xfail(condition=(theano.config.floatX == "float32"), reason="Fails on float32")
     def test_zeroinflatedpoisson(self):
-        self.checkd(ZeroInflatedPoisson, Nat, {"theta": Rplus, "psi": Unit})
+        self.checkd(
+            ZeroInflatedPoisson,
+            Nat,
+            {"theta": Rplus, "psi": Unit},
+        )
+        self.check_selfconsistency_discrete_logcdf(
+            ZeroInflatedPoisson,
+            Nat,
+            {"theta": Rplus, "psi": Unit},
+        )
 
     # Too lazy to propagate decimal parameter through the whole chain of deps
     @pytest.mark.xfail(condition=(theano.config.floatX == "float32"), reason="Fails on float32")
@@ -1047,11 +1328,25 @@ class TestMatchesScipy(SeededTest):
             Nat,
             {"mu": Rplusbig, "alpha": Rplusbig, "psi": Unit},
         )
+        self.check_selfconsistency_discrete_logcdf(
+            ZeroInflatedNegativeBinomial,
+            Nat,
+            {"mu": Rplusbig, "alpha": Rplusbig, "psi": Unit},
+        )
 
     # Too lazy to propagate decimal parameter through the whole chain of deps
     @pytest.mark.xfail(condition=(theano.config.floatX == "float32"), reason="Fails on float32")
     def test_zeroinflatedbinomial(self):
-        self.checkd(ZeroInflatedBinomial, Nat, {"n": NatSmall, "p": Unit, "psi": Unit})
+        self.checkd(
+            ZeroInflatedBinomial,
+            Nat,
+            {"n": NatSmall, "p": Unit, "psi": Unit},
+        )
+        self.check_selfconsistency_discrete_logcdf(
+            ZeroInflatedBinomial,
+            Nat,
+            {"n": NatSmall, "p": Unit, "psi": Unit},
+        )
 
     @pytest.mark.parametrize("n", [1, 2, 3])
     def test_mvnormal(self, n):
@@ -1469,6 +1764,145 @@ class TestMatchesScipy(SeededTest):
         sample = dist.random(size=2)
         assert_allclose(sample, np.stack([vals, vals], axis=0))
 
+    @pytest.mark.parametrize("n", [2, 3])
+    def test_dirichlet_multinomial(self, n):
+        self.pymc3_matches_scipy(
+            DirichletMultinomial,
+            Vector(Nat, n),
+            {"a": Vector(Rplus, n), "n": Nat},
+            dirichlet_multinomial_logpmf,
+        )
+
+    def test_dirichlet_multinomial_matches_beta_binomial(self):
+        a, b, n = 2, 1, 5
+        ns = np.arange(n + 1)
+        ns_dm = np.vstack((ns, n - ns)).T  # covert ns=1 to ns_dm=[1, 4], for all ns...
+        bb_logp = pm.BetaBinomial.dist(n=n, alpha=a, beta=b).logp(ns).tag.test_value
+        dm_logp = (
+            pm.DirichletMultinomial.dist(n=n, a=[a, b], shape=(1, 2)).logp(ns_dm).tag.test_value
+        )
+        dm_logp = dm_logp.ravel()
+        assert_almost_equal(
+            dm_logp,
+            bb_logp,
+            decimal=select_by_precision(float64=6, float32=3),
+        )
+
+    @pytest.mark.parametrize(
+        "a, n, shape",
+        [
+            [[0.25, 0.25, 0.25, 0.25], 1, (1, 4)],
+            [[0.3, 0.6, 0.05, 0.05], 2, (1, 4)],
+            [[0.3, 0.6, 0.05, 0.05], 10, (1, 4)],
+            [[0.25, 0.25, 0.25, 0.25], 1, (2, 4)],
+            [[0.3, 0.6, 0.05, 0.05], 2, (3, 4)],
+            [[[0.25, 0.25, 0.25, 0.25], [0.26, 0.26, 0.26, 0.22]], [1, 10], (2, 4)],
+        ],
+    )
+    def test_dirichlet_multinomial_defaultval(self, a, n, shape):
+        a = np.asarray(a)
+        with Model() as model:
+            m = DirichletMultinomial("m", n=n, a=a, shape=shape)
+        assert_allclose(m.distribution._defaultval.eval().sum(axis=-1), n)
+
+    def test_dirichlet_multinomial_vec(self):
+        vals = np.array([[2, 4, 4], [3, 3, 4]])
+        a = np.array([0.2, 0.3, 0.5])
+        n = 10
+
+        with Model() as model_single:
+            DirichletMultinomial("m", n=n, a=a, shape=len(a))
+
+        with Model() as model_many:
+            DirichletMultinomial("m", n=n, a=a, shape=vals.shape)
+
+        assert_almost_equal(
+            np.asarray([dirichlet_multinomial_logpmf(v, n, a) for v in vals]),
+            np.asarray([model_single.fastlogp({"m": val}) for val in vals]),
+            decimal=4,
+        )
+
+        assert_almost_equal(
+            np.asarray([dirichlet_multinomial_logpmf(v, n, a) for v in vals]),
+            model_many.free_RVs[0].logp_elemwise({"m": vals}).squeeze(),
+            decimal=4,
+        )
+
+        assert_almost_equal(
+            sum([model_single.fastlogp({"m": val}) for val in vals]),
+            model_many.fastlogp({"m": vals}),
+            decimal=4,
+        )
+
+    def test_dirichlet_multinomial_vec_1d_n(self):
+        vals = np.array([[2, 4, 4], [4, 3, 4]])
+        a = np.array([0.2, 0.3, 0.5])
+        ns = np.array([10, 11])
+
+        with Model() as model:
+            DirichletMultinomial("m", n=ns, a=a, shape=vals.shape)
+
+        assert_almost_equal(
+            sum([dirichlet_multinomial_logpmf(val, n, a) for val, n in zip(vals, ns)]),
+            model.fastlogp({"m": vals}),
+            decimal=4,
+        )
+
+    def test_dirichlet_multinomial_vec_1d_n_2d_a(self):
+        vals = np.array([[2, 4, 4], [4, 3, 4]])
+        as_ = np.array([[0.2, 0.3, 0.5], [0.9, 0.09, 0.01]])
+        ns = np.array([10, 11])
+
+        with Model() as model:
+            DirichletMultinomial("m", n=ns, a=as_, shape=vals.shape)
+
+        assert_almost_equal(
+            sum([dirichlet_multinomial_logpmf(val, n, a) for val, n, a in zip(vals, ns, as_)]),
+            model.fastlogp({"m": vals}),
+            decimal=4,
+        )
+
+    def test_dirichlet_multinomial_vec_2d_a(self):
+        vals = np.array([[2, 4, 4], [3, 3, 4]])
+        as_ = np.array([[0.2, 0.3, 0.5], [0.3, 0.3, 0.4]])
+        n = 10
+
+        with Model() as model:
+            DirichletMultinomial("m", n=n, a=as_, shape=vals.shape)
+
+        assert_almost_equal(
+            sum([dirichlet_multinomial_logpmf(val, n, a) for val, a in zip(vals, as_)]),
+            model.fastlogp({"m": vals}),
+            decimal=4,
+        )
+
+    def test_batch_dirichlet_multinomial(self):
+        # Test that DM can handle a 3d array for `a`
+
+        # Create an almost deterministic DM by setting a to 0.001, everywehere
+        # except for one category / dimension which is given the value of 1000
+        n = 5
+        vals = np.zeros((4, 5, 3), dtype="int32")
+        a = np.zeros_like(vals, dtype=theano.config.floatX) + 0.001
+        inds = np.random.randint(vals.shape[-1], size=vals.shape[:-1])[..., None]
+        np.put_along_axis(vals, inds, n, axis=-1)
+        np.put_along_axis(a, inds, 1000, axis=-1)
+
+        dist = DirichletMultinomial.dist(n=n, a=a, shape=vals.shape)
+
+        # Logp should be approx -9.924431e-06
+        dist_logp = dist.logp(vals).tag.test_value
+        expected_logp = np.full(shape=vals.shape[:-1] + (1,), fill_value=-9.924431e-06)
+        assert_almost_equal(
+            dist_logp,
+            expected_logp,
+            decimal=select_by_precision(float64=6, float32=3),
+        )
+
+        # Samples should be equal given the almost deterministic DM
+        sample = dist.random(size=2)
+        assert_allclose(sample, np.stack([vals, vals], axis=0))
+
     def test_categorical_bounds(self):
         with Model():
             x = Categorical("x", p=np.array([0.2, 0.3, 0.5]))
@@ -1516,6 +1950,15 @@ class TestMatchesScipy(SeededTest):
             lambda value, eta, cutpoints: orderedlogistic_logpdf(value, eta, cutpoints),
         )
 
+    @pytest.mark.parametrize("n", [2, 3, 4])
+    def test_orderedprobit(self, n):
+        self.pymc3_matches_scipy(
+            OrderedProbit,
+            Domain(range(n), "int64"),
+            {"eta": Runif, "cutpoints": UnitSortedVector(n - 1)},
+            lambda value, eta, cutpoints: orderedprobit_logpdf(value, eta, cutpoints),
+        )
+
     def test_densitydist(self):
         def logp(x):
             return -log(2 * 0.5) - abs(x - 0.5) / 0.5
@@ -1537,6 +1980,9 @@ class TestMatchesScipy(SeededTest):
             (15.0, 5.000, 7.500, 7.500, -3.3093854),
             (50.0, 50.000, 10.000, 10.000, -3.6436067),
             (1000.0, 500.000, 10.000, 20.000, -27.8707323),
+            (-1.0, 1.0, 20.0, 0.9, -3.91967108),  # Fails in scipy version
+            (0.01, 0.01, 100.0, 0.01, -5.5241087),  # Fails in scipy version
+            (-1.0, 0.0, 0.1, 0.1, -51.022349),  # Fails in previous pymc3 version
         ],
     )
     def test_ex_gaussian(self, value, mu, sigma, nu, logp):
@@ -1563,6 +2009,9 @@ class TestMatchesScipy(SeededTest):
             (15.0, 5.000, 7.500, 7.500, -0.4545255),
             (50.0, 50.000, 10.000, 10.000, -1.433714),
             (1000.0, 500.000, 10.000, 20.000, -1.573708e-11),
+            (0.01, 0.01, 100.0, 0.01, -0.69314718),  # Fails in scipy version
+            (-0.43402407, 0.0, 0.1, 0.1, -13.59615423),  # Previous 32-bit version failed here
+            (-0.72402009, 0.0, 0.1, 0.1, -31.26571842),  # Previous 64-bit version failed here
         ],
     )
     def test_ex_gaussian_cdf(self, value, mu, sigma, nu, logcdf):
@@ -1776,58 +2225,128 @@ class TestStrAndLatexRepr:
             # Test Cholesky parameterization
             Z = MvNormal("Z", mu=np.zeros(2), chol=np.eye(2), shape=(2,))
 
+            # NegativeBinomial representations to test issue 4186
+            nb1 = pm.NegativeBinomial(
+                "nb_with_mu_alpha", mu=pm.Normal("nbmu"), alpha=pm.Gamma("nbalpha", mu=6, sigma=1)
+            )
+            nb2 = pm.NegativeBinomial("nb_with_p_n", p=pm.Uniform("nbp"), n=10)
+
             # Expected value of outcome
             mu = Deterministic("mu", floatX(alpha + tt.dot(X, b)))
 
+            # add a bounded variable as well
+            bound_var = Bound(Normal, lower=1.0)("bound_var", mu=0, sigma=10)
+
+            # KroneckerNormal
+            n, m = 3, 4
+            covs = [np.eye(n), np.eye(m)]
+            kron_normal = KroneckerNormal("kron_normal", mu=np.zeros(n * m), covs=covs, shape=n * m)
+
+            # MatrixNormal
+            matrix_normal = MatrixNormal(
+                "mat_normal",
+                mu=np.random.normal(size=n),
+                rowcov=np.eye(n),
+                colchol=np.linalg.cholesky(np.eye(n)),
+                shape=(n, n),
+            )
+
+            # DirichletMultinomial
+            dm = DirichletMultinomial("dm", n=5, a=[1, 1, 1], shape=(2, 3))
+
             # Likelihood (sampling distribution) of observations
             Y_obs = Normal("Y_obs", mu=mu, sigma=sigma, observed=Y)
-        self.distributions = [alpha, sigma, mu, b, Z, Y_obs]
-        self.expected_latex = (
-            r"$\text{alpha} \sim \text{Normal}(\mathit{mu}=0.0,~\mathit{sigma}=10.0)$",
-            r"$\text{sigma} \sim \text{HalfNormal}(\mathit{sigma}=1.0)$",
-            r"$\text{mu} \sim \text{Deterministic}(\text{alpha},~\text{Constant},~\text{beta})$",
-            r"$\text{beta} \sim \text{Normal}(\mathit{mu}=0.0,~\mathit{sigma}=10.0)$",
-            r"$\text{Z} \sim \text{MvNormal}(\mathit{mu}=array,~\mathit{chol_cov}=array)$",
-            r"$\text{Y_obs} \sim \text{Normal}(\mathit{mu}=\text{mu},~\mathit{sigma}=f(\text{sigma}))$",
-        )
-        self.expected_str = (
-            r"alpha ~ Normal(mu=0.0, sigma=10.0)",
-            r"sigma ~ HalfNormal(sigma=1.0)",
-            r"mu ~ Deterministic(alpha, Constant, beta)",
-            r"beta ~ Normal(mu=0.0, sigma=10.0)",
-            r"Z ~ MvNormal(mu=array, chol_cov=array)",
-            r"Y_obs ~ Normal(mu=mu, sigma=f(sigma))",
-        )
+
+        self.distributions = [alpha, sigma, mu, b, Z, nb1, nb2, Y_obs, bound_var]
+        self.expected = {
+            "latex": (
+                r"$\text{alpha} \sim \text{Normal}$",
+                r"$\text{sigma} \sim \text{HalfNormal}$",
+                r"$\text{mu} \sim \text{Deterministic}$",
+                r"$\text{beta} \sim \text{Normal}$",
+                r"$\text{Z} \sim \text{MvNormal}$",
+                r"$\text{nb_with_mu_alpha} \sim \text{NegativeBinomial}$",
+                r"$\text{nb_with_p_n} \sim \text{NegativeBinomial}$",
+                r"$\text{Y_obs} \sim \text{Normal}$",
+                r"$\text{bound_var} \sim \text{Bound}$ -- \text{Normal}$",
+                r"$\text{kron_normal} \sim \text{KroneckerNormal}$",
+                r"$\text{mat_normal} \sim \text{MatrixNormal}$",
+                r"$\text{dm} \sim \text{DirichletMultinomial}$",
+            ),
+            "plain": (
+                r"alpha ~ Normal",
+                r"sigma ~ HalfNormal",
+                r"mu ~ Deterministic",
+                r"beta ~ Normal",
+                r"Z ~ MvNormal",
+                r"nb_with_mu_alpha ~ NegativeBinomial",
+                r"nb_with_p_n ~ NegativeBinomial",
+                r"Y_obs ~ Normal",
+                r"bound_var ~ Bound-Normal",
+                r"kron_normal ~ KroneckerNormal",
+                r"mat_normal ~ MatrixNormal",
+                r"dm ~ DirichletMultinomial",
+            ),
+            "latex_with_params": (
+                r"$\text{alpha} \sim \text{Normal}(\mathit{mu}=0.0,~\mathit{sigma}=10.0)$",
+                r"$\text{sigma} \sim \text{HalfNormal}(\mathit{sigma}=1.0)$",
+                r"$\text{mu} \sim \text{Deterministic}(\text{alpha},~\text{Constant},~\text{beta})$",
+                r"$\text{beta} \sim \text{Normal}(\mathit{mu}=0.0,~\mathit{sigma}=10.0)$",
+                r"$\text{Z} \sim \text{MvNormal}(\mathit{mu}=array,~\mathit{chol_cov}=array)$",
+                r"$\text{nb_with_mu_alpha} \sim \text{NegativeBinomial}(\mathit{mu}=\text{nbmu},~\mathit{alpha}=\text{nbalpha})$",
+                r"$\text{nb_with_p_n} \sim \text{NegativeBinomial}(\mathit{p}=\text{nbp},~\mathit{n}=10)$",
+                r"$\text{Y_obs} \sim \text{Normal}(\mathit{mu}=\text{mu},~\mathit{sigma}=f(\text{sigma}))$",
+                r"$\text{bound_var} \sim \text{Bound}(\mathit{lower}=1.0,~\mathit{upper}=\text{None})$ -- \text{Normal}(\mathit{mu}=0.0,~\mathit{sigma}=10.0)$",
+                r"$\text{kron_normal} \sim \text{KroneckerNormal}(\mathit{mu}=array)$",
+                r"$\text{mat_normal} \sim \text{MatrixNormal}(\mathit{mu}=array,~\mathit{rowcov}=array,~\mathit{colchol_cov}=array)$",
+                r"$\text{dm} \sim \text{DirichletMultinomial}(\mathit{n}=5,~\mathit{a}=array)$",
+            ),
+            "plain_with_params": (
+                r"alpha ~ Normal(mu=0.0, sigma=10.0)",
+                r"sigma ~ HalfNormal(sigma=1.0)",
+                r"mu ~ Deterministic(alpha, Constant, beta)",
+                r"beta ~ Normal(mu=0.0, sigma=10.0)",
+                r"Z ~ MvNormal(mu=array, chol_cov=array)",
+                r"nb_with_mu_alpha ~ NegativeBinomial(mu=nbmu, alpha=nbalpha)",
+                r"nb_with_p_n ~ NegativeBinomial(p=nbp, n=10)",
+                r"Y_obs ~ Normal(mu=mu, sigma=f(sigma))",
+                r"bound_var ~ Bound(lower=1.0, upper=None)-Normal(mu=0.0, sigma=10.0)",
+                r"kron_normal ~ KroneckerNormal(mu=array)",
+                r"mat_normal ~ MatrixNormal(mu=array, rowcov=array, colchol_cov=array)",
+                r"dm∼DirichletMultinomial(n=5, a=array)",
+            ),
+        }
 
     def test__repr_latex_(self):
-        for distribution, tex in zip(self.distributions, self.expected_latex):
+        for distribution, tex in zip(self.distributions, self.expected["latex_with_params"]):
             assert distribution._repr_latex_() == tex
 
         model_tex = self.model._repr_latex_()
 
-        for tex in self.expected_latex:  # make sure each variable is in the model
+        # make sure each variable is in the model
+        for tex in self.expected["latex"]:
             for segment in tex.strip("$").split(r"\sim"):
                 assert segment in model_tex
 
     def test___latex__(self):
-        for distribution, tex in zip(self.distributions, self.expected_latex):
+        for distribution, tex in zip(self.distributions, self.expected["latex_with_params"]):
             assert distribution._repr_latex_() == distribution.__latex__()
         assert self.model._repr_latex_() == self.model.__latex__()
 
     def test___str__(self):
-        for distribution, str_repr in zip(self.distributions, self.expected_str):
+        for distribution, str_repr in zip(self.distributions, self.expected["plain"]):
             assert distribution.__str__() == str_repr
 
         model_str = self.model.__str__()
-        for str_repr in self.expected_str:
+        for str_repr in self.expected["plain"]:
             assert str_repr in model_str
 
     def test_str(self):
-        for distribution, str_repr in zip(self.distributions, self.expected_str):
+        for distribution, str_repr in zip(self.distributions, self.expected["plain"]):
             assert str(distribution) == str_repr
 
         model_str = str(self.model)
-        for str_repr in self.expected_str:
+        for str_repr in self.expected["plain"]:
             assert str_repr in model_str
 
 

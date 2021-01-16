@@ -54,14 +54,14 @@ import theano
 import theano.tensor as tt
 
 import pymc3 as pm
-from pymc3.util import get_transformed
-from .updates import adagrad_window
-from ..blocking import ArrayOrdering, DictToArrayBijection, VarMap
-from ..backends import NDArray, Text, SQLite, HDF5
-from ..model import modelcontext
-from ..theanof import tt_rng, change_flags, identity
-from ..util import get_default_varnames
-from ..memoize import WithMemoization, memoize
+
+from pymc3.backends import NDArray
+from pymc3.blocking import ArrayOrdering, DictToArrayBijection, VarMap
+from pymc3.memoize import WithMemoization, memoize
+from pymc3.model import modelcontext
+from pymc3.theanof import change_flags, identity, tt_rng
+from pymc3.util import get_default_varnames, get_transformed
+from pymc3.variational.updates import adagrad_window
 
 __all__ = ["ObjectiveFunction", "Operator", "TestFunction", "Group", "Approximation"]
 
@@ -1078,9 +1078,9 @@ class Group(WithMemoization):
             if deterministic:
                 return tt.ones(shape, dtype) * dist_map
             else:
-                return getattr(self._rng, dist_name)(shape)
+                return getattr(self._rng, dist_name)(size=shape)
         else:
-            sample = getattr(self._rng, dist_name)(shape)
+            sample = getattr(self._rng, dist_name)(size=shape)
             initial = tt.switch(deterministic, tt.ones(shape, dtype) * dist_map, sample)
             return initial
 
@@ -1597,7 +1597,7 @@ class Approximation(WithMemoization):
 
         return inner
 
-    def sample(self, draws=500, include_transformed=True, backend="ndarray", name=None):
+    def sample(self, draws=500, include_transformed=True):
         """Draw samples from variational posterior.
 
         Parameters
@@ -1606,11 +1606,6 @@ class Approximation(WithMemoization):
             Number of random samples.
         include_transformed: `bool`
             If True, transformed variables are also sampled. Default is False.
-        backend: `str`
-            Trace backend type to use. Valid entries include: 'ndarray' (default),
-            'text', 'sqlite', 'hdf5'.
-        name: `str`
-            Name for backend (required for non-NDArray backends). Default is None.
 
         Returns
         -------
@@ -1622,10 +1617,8 @@ class Approximation(WithMemoization):
         )
         samples = self.sample_dict_fn(draws)  # type: dict
         points = ({name: records[i] for name, records in samples.items()} for i in range(draws))
-        _backends = dict(ndarray=NDArray, text=Text, hdf5=HDF5, sqlite=SQLite)
 
-        trace = _backends[backend](
-            name=name,
+        trace = NDArray(
             model=self.model,
             vars=vars_sampled,
             test_point={name: records[0] for name, records in samples.items()},

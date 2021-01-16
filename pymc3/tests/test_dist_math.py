@@ -14,24 +14,26 @@
 
 import numpy as np
 import numpy.testing as npt
-import theano.tensor as tt
-import theano
-import theano.tests.unittest_tools as utt
-import pymc3 as pm
-from scipy import stats, interpolate
 import pytest
+import theano
+import theano.tensor as tt
 
-from ..theanof import floatX
-from ..distributions import Discrete
-from ..distributions.dist_math import (
-    bound,
-    factln,
-    alltrue_scalar,
+from scipy import interpolate, stats
+
+import pymc3 as pm
+
+from pymc3.distributions import Discrete
+from pymc3.distributions.dist_math import (
     MvNormalLogp,
     SplineWrapper,
-    i0e,
+    alltrue_scalar,
+    bound,
     clipped_beta_rvs,
+    factln,
+    i0e,
 )
+from pymc3.tests.helpers import verify_grad
+from pymc3.theanof import floatX
 
 
 def test_bound():
@@ -56,6 +58,13 @@ def test_bound():
     cond = np.array([[1, 1, 1], [1, 0, 1]])
     assert not np.all(bound(logp, cond).eval() == 1)
     assert np.prod(bound(logp, cond).eval()) == -np.inf
+
+
+def test_check_bounds_false():
+    with pm.Model(check_bounds=False):
+        logp = tt.ones(3)
+        cond = np.array([1, 0, 1])
+        assert np.all(bound(logp, cond).eval() == logp.eval())
 
 
 def test_alltrue_scalar():
@@ -175,10 +184,10 @@ class TestMvNormalLogp:
         chol_vec_val = floatX(np.array([0.5, 1.0, -0.1]))
 
         delta_val = floatX(np.random.randn(1, 2))
-        utt.verify_grad(func, [chol_vec_val, delta_val])
+        verify_grad(func, [chol_vec_val, delta_val])
 
         delta_val = floatX(np.random.randn(5, 2))
-        utt.verify_grad(func, [chol_vec_val, delta_val])
+        verify_grad(func, [chol_vec_val, delta_val])
 
     @pytest.mark.skip(reason="Fix in theano not released yet: Theano#5908")
     @theano.configparser.change_flags(compute_test_value="ignore")
@@ -205,7 +214,7 @@ class TestSplineWrapper:
         x = np.linspace(0, 1, 100)
         y = x * x
         spline = SplineWrapper(interpolate.InterpolatedUnivariateSpline(x, y, k=1))
-        utt.verify_grad(spline, [0.5])
+        verify_grad(spline, [0.5])
 
     @theano.configparser.change_flags(compute_test_value="ignore")
     def test_hessian(self):
@@ -221,10 +230,10 @@ class TestSplineWrapper:
 class TestI0e:
     @theano.configparser.change_flags(compute_test_value="ignore")
     def test_grad(self):
-        utt.verify_grad(i0e, [0.5])
-        utt.verify_grad(i0e, [-2.0])
-        utt.verify_grad(i0e, [[0.5, -2.0]])
-        utt.verify_grad(i0e, [[[0.5, -2.0]]])
+        verify_grad(i0e, [0.5])
+        verify_grad(i0e, [-2.0])
+        verify_grad(i0e, [[0.5, -2.0]])
+        verify_grad(i0e, [[[0.5, -2.0]]])
 
 
 @pytest.mark.parametrize("dtype", ["float16", "float32", "float64", "float128"])

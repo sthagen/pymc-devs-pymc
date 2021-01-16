@@ -15,6 +15,18 @@ Check out the `getting started guide <http://docs.pymc.io/notebooks/getting_star
 using Binder!
 For questions on PyMC3, head on over to our `PyMC Discourse <https://discourse.pymc.io/>`__ forum.
 
+The future of PyMC3 & Theano
+============================
+
+There have been many questions and uncertainty around the future of PyMC3 since Theano
+stopped getting developed by the original authors, and we started experiments with PyMC4.
+
+We are happy to announce that PyMC3 on Theano (which we are `developing further <https://github.com/pymc-devs/Theano-PyMC>`__)
+with a new JAX backend is the future. PyMC4 will not be developed further.
+
+See the `full announcement <https://pymc-devs.medium.com/the-future-of-pymc3-or-theano-is-dead-long-live-theano-d8005f8a0e9b>`__
+for more details.
+
 Features
 ========
 
@@ -27,8 +39,8 @@ Features
 -  **Variational inference**: `ADVI <http://www.jmlr.org/papers/v18/16-107.html>`__
    for fast approximate posterior estimation as well as mini-batch ADVI
    for large data sets.
--  Relies on `Theano <http://deeplearning.net/software/theano/>`__ which provides:
-    *  Computation optimization and dynamic C compilation
+-  Relies on `Theano-PyMC <https://theano-pymc.readthedocs.io/en/latest/>`__ which provides:
+    *  Computation optimization and dynamic C or JAX compilation
     *  Numpy broadcasting and advanced indexing
     *  Linear algebra operators
     *  Simple extensibility
@@ -60,62 +72,16 @@ PyMC3 talks
 -----------
 
 There are also several talks on PyMC3 which are gathered in this `YouTube playlist <https://www.youtube.com/playlist?list=PL1Ma_1DBbE82OVW8Fz_6Ts1oOeyOAiovy>`__
+and as part of `PyMCon 2020 <https://discourse.pymc.io/c/pymcon/2020talks/15>`__
 
 Installation
 ============
 
-The latest release of PyMC3 can be installed from PyPI using ``pip``:
+To install PyMC3 on your system, follow the instructions on the appropriate installation guide:
 
-::
-
-    pip install pymc3
-
-**Note:** Running ``pip install pymc`` will install PyMC 2.3, not PyMC3,
-from PyPI.
-
-Or via conda-forge:
-
-::
-
-    conda install -c conda-forge pymc3
-
-Plotting is done using `ArviZ <https://arviz-devs.github.io/arviz/>`__ - if you follow the installation instructions above, then it will be installed alongside ``PyMC3``.
-
-The current development branch of PyMC3 can be installed from GitHub, also using ``pip``:
-
-::
-
-    pip install git+https://github.com/pymc-devs/pymc3
-
-To ensure the development branch of Theano is installed alongside PyMC3
-(recommended), you can install PyMC3 using the ``requirements.txt``
-file. This requires cloning the repository to your computer:
-
-::
-
-    git clone https://github.com/pymc-devs/pymc3
-    cd pymc3
-    pip install -r requirements.txt
-
-However, if a recent version of Theano has already been installed on
-your system, you can install PyMC3 directly from GitHub.
-
-Another option is to clone the repository and install PyMC3 using
-``python setup.py install`` or ``python setup.py develop``.
-
-
-Dependencies
-============
-
-PyMC3 is tested on Python 3.6 and depends on Theano, NumPy,
-SciPy, and Pandas (see ``requirements.txt`` for version
-information).
-
-Optional
---------
-
-In addtion to the above dependencies, the GLM submodule relies on
-`Patsy <http://patsy.readthedocs.io/en/latest/>`__.
+-  `Installing PyMC3 on MacOS <https://github.com/pymc-devs/pymc3/wiki/Installation-Guide-(MacOS)>`__
+-  `Installing PyMC3 on Linux <https://github.com/pymc-devs/pymc3/wiki/Installation-Guide-(Linux)>`__
+-  `Installing PyMC3 on Windows <https://github.com/pymc-devs/pymc3/wiki/Installation-Guide-(Windows)>`__
 
 
 Citing PyMC3
@@ -156,6 +122,7 @@ Software using PyMC3
 - `beat <https://github.com/hvasbath/beat>`__: Bayesian Earthquake Analysis Tool.
 - `pymc-learn <https://github.com/pymc-learn/pymc-learn>`__: Custom PyMC models built on top of pymc3_models/scikit-learn API
 - `fenics-pymc3 <https://github.com/IvanYashchuk/fenics-pymc3>`__: Differentiable interface to FEniCS, a library for solving partial differential equations.
+- `cell2location <https://github.com/BayraktarLab/cell2location>`__: Comprehensive mapping of tissue cell architecture via integrated single cell and spatial transcriptomics.
 
 Please contact us if your software is not listed here.
 
@@ -198,8 +165,8 @@ Sponsors
 
 .. |Binder| image:: https://mybinder.org/badge_logo.svg
    :target: https://mybinder.org/v2/gh/pymc-devs/pymc3/master?filepath=%2Fdocs%2Fsource%2Fnotebooks
-.. |Build Status| image:: https://travis-ci.org/pymc-devs/pymc3.svg?branch=master
-   :target: https://travis-ci.org/pymc-devs/pymc3
+.. |Build Status| image:: https://github.com/pymc-devs/pymc3/workflows/pytest/badge.svg
+   :target: https://github.com/pymc-devs/pymc3/actions
 .. |Coverage| image:: https://codecov.io/gh/pymc-devs/pymc3/branch/master/graph/badge.svg
   :target: https://codecov.io/gh/pymc-devs/pymc3
 .. |Dockerhub| image:: https://img.shields.io/docker/automated/pymc/pymc3.svg

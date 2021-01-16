@@ -14,18 +14,19 @@
 
 import numpy as np
 import numpy.random as nr
-import theano
 import scipy.linalg
+import theano
 
-from ..distributions import draw_values
-from .arraystep import (
-    ArrayStepShared,
-    PopulationArrayStepShared,
-    ArrayStep,
-    metrop_select,
-    Competence,
-)
 import pymc3 as pm
+
+from pymc3.distributions import draw_values
+from pymc3.step_methods.arraystep import (
+    ArrayStep,
+    ArrayStepShared,
+    Competence,
+    PopulationArrayStepShared,
+    metrop_select,
+)
 from pymc3.theanof import floatX
 
 __all__ = [
@@ -363,7 +364,7 @@ class BinaryGibbsMetropolis(ArrayStep):
         e.g., [0, 2, 1, ...]. Default is random
     transit_p: float
         The diagonal of the transition kernel. A value > .5 gives anticorrelated proposals,
-        which resulting in more efficient antithetical sampling.
+        which resulting in more efficient antithetical sampling. Default is 0.8
     model: PyMC Model
         Optional model for sampling step. Defaults to None (taken from context).
 

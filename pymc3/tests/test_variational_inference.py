@@ -12,38 +12,35 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
-import pytest
 import functools
 import io
 import operator
+
 import numpy as np
+import pytest
 import theano
 import theano.tensor as tt
-
 
 import pymc3 as pm
 import pymc3.memoize
 import pymc3.util
-from pymc3.theanof import (
-    change_flags,
-    intX,
-)
+
+from pymc3.tests import models
+from pymc3.tests.helpers import not_raises
+from pymc3.theanof import intX
+from pymc3.variational import flows, opvi
 from pymc3.variational.approximations import (
-    MeanFieldGroup,
-    FullRankGroup,
-    NormalizingFlowGroup,
-    EmpiricalGroup,
-    MeanField,
-    FullRank,
-    NormalizingFlow,
     Empirical,
+    EmpiricalGroup,
+    FullRank,
+    FullRankGroup,
+    MeanField,
+    MeanFieldGroup,
+    NormalizingFlow,
+    NormalizingFlowGroup,
 )
-from pymc3.variational.inference import ADVI, FullRankADVI, SVGD, NFVI, ASVGD, fit
-from pymc3.variational import flows
+from pymc3.variational.inference import ADVI, ASVGD, NFVI, SVGD, FullRankADVI, fit
 from pymc3.variational.opvi import Approximation, Group
-from pymc3.variational import opvi
-from . import models
-from .helpers import not_raises
 
 pytestmark = pytest.mark.usefixtures("strict_float32", "seeded_test")
 
@@ -176,12 +173,10 @@ def three_var_approx_single_group_mf(three_var_model):
     return MeanField(model=three_var_model)
 
 
-@pytest.fixture(
-    params=[("ndarray", None), ("text", "test"), ("sqlite", "test.sqlite"), ("hdf5", "test.h5")]
-)
+@pytest.fixture
 def test_sample_simple(three_var_approx, request):
     backend, name = request.param
-    trace = three_var_approx.sample(100, backend=backend, name=name)
+    trace = three_var_approx.sample(100, name=name)
     assert set(trace.varnames) == {"one", "one_log__", "three", "two"}
     assert len(trace) == 100
     assert trace[0]["one"].shape == (10, 2)
@@ -538,17 +533,20 @@ def test_scale_cost_to_minibatch_works(aux_total_size):
     sigma = 1.0
     y_obs = np.array([1.6, 1.4])
     beta = len(y_obs) / float(aux_total_size)
-    post_mu = np.array([1.88], dtype=theano.config.floatX)
-    post_sigma = np.array([1], dtype=theano.config.floatX)
 
     # TODO: theano_config
     # with pm.Model(theano_config=dict(floatX='float64')):
     # did not not work as expected
     # there were some numeric problems, so float64 is forced
-    with pm.theanof.change_flags(floatX="float64", warn_float64="ignore"):
+    with theano.config.change_flags(floatX="float64", warn_float64="ignore"):
+
+        assert theano.config.floatX == "float64"
+        assert theano.config.warn_float64 == "ignore"
+
+        post_mu = np.array([1.88], dtype=theano.config.floatX)
+        post_sigma = np.array([1], dtype=theano.config.floatX)
+
         with pm.Model():
-            assert theano.config.floatX == "float64"
-            assert theano.config.warn_float64 == "ignore"
             mu = pm.Normal("mu", mu=mu0, sigma=sigma)
             pm.Normal("y", mu=mu, sigma=1, observed=y_obs, total_size=aux_total_size)
             # Create variational gradient tensor
@@ -557,7 +555,7 @@ def test_scale_cost_to_minibatch_works(aux_total_size):
             mean_field_1.shared_params["mu"].set_value(post_mu)
             mean_field_1.shared_params["rho"].set_value(np.log(np.exp(post_sigma) - 1))
 
-            with pm.theanof.change_flags(compute_test_value="off"):
+            with theano.config.change_flags(compute_test_value="off"):
                 elbo_via_total_size_scaled = -pm.operators.KL(mean_field_1)()(10000)
 
         with pm.Model():
@@ -571,7 +569,7 @@ def test_scale_cost_to_minibatch_works(aux_total_size):
             mean_field_2.shared_params["mu"].set_value(post_mu)
             mean_field_2.shared_params["rho"].set_value(np.log(np.exp(post_sigma) - 1))
 
-        with pm.theanof.change_flags(compute_test_value="off"):
+        with theano.config.change_flags(compute_test_value="off"):
             elbo_via_total_size_unscaled = -pm.operators.KL(mean_field_2)()(10000)
 
         np.testing.assert_allclose(
@@ -588,9 +586,12 @@ def test_elbo_beta_kl(aux_total_size):
     sigma = 1.0
     y_obs = np.array([1.6, 1.4])
     beta = len(y_obs) / float(aux_total_size)
-    post_mu = np.array([1.88], dtype=theano.config.floatX)
-    post_sigma = np.array([1], dtype=theano.config.floatX)
-    with pm.theanof.change_flags(floatX="float64", warn_float64="ignore"):
+
+    with theano.config.change_flags(floatX="float64", warn_float64="ignore"):
+
+        post_mu = np.array([1.88], dtype=theano.config.floatX)
+        post_sigma = np.array([1], dtype=theano.config.floatX)
+
         with pm.Model():
             mu = pm.Normal("mu", mu=mu0, sigma=sigma)
             pm.Normal("y", mu=mu, sigma=1, observed=y_obs, total_size=aux_total_size)
@@ -600,7 +601,7 @@ def test_elbo_beta_kl(aux_total_size):
             mean_field_1.shared_params["mu"].set_value(post_mu)
             mean_field_1.shared_params["rho"].set_value(np.log(np.exp(post_sigma) - 1))
 
-            with pm.theanof.change_flags(compute_test_value="off"):
+            with theano.config.change_flags(compute_test_value="off"):
                 elbo_via_total_size_scaled = -pm.operators.KL(mean_field_1)()(10000)
 
         with pm.Model():
@@ -611,7 +612,7 @@ def test_elbo_beta_kl(aux_total_size):
             mean_field_3.shared_params["mu"].set_value(post_mu)
             mean_field_3.shared_params["rho"].set_value(np.log(np.exp(post_sigma) - 1))
 
-            with pm.theanof.change_flags(compute_test_value="off"):
+            with theano.config.change_flags(compute_test_value="off"):
                 elbo_via_beta_kl = -pm.operators.KL(mean_field_3, beta=beta)()(10000)
 
         np.testing.assert_allclose(
@@ -750,7 +751,7 @@ def test_remove_scan_op():
         inference = ADVI()
         buff = io.StringIO()
         inference.run_profiling(n=10).summary(buff)
-        assert "theano.scan_module.scan_op.Scan" not in buff.getvalue()
+        assert "theano.scan.op.Scan" not in buff.getvalue()
         buff.close()
 
 
@@ -1019,7 +1020,7 @@ def flow_spec(request):
 def test_flow_det(flow_spec):
     z0 = tt.arange(0, 20).astype("float32")
     flow = flow_spec(dim=20, z0=z0.dimshuffle("x", 0))
-    with change_flags(compute_test_value="off"):
+    with theano.config.change_flags(compute_test_value="off"):
         z1 = flow.forward.flatten()
         J = tt.jacobian(z1, z0)
         logJdet = tt.log(tt.abs_(tt.nlinalg.det(J)))
@@ -1035,7 +1036,7 @@ def test_flow_det_local(flow_spec):
         params[k] = np.random.randn(1, *shp).astype("float32")
     flow = flow_spec(dim=12, z0=z0.reshape((1, 1, 12)), **params)
     assert flow.batched
-    with change_flags(compute_test_value="off"):
+    with theano.config.change_flags(compute_test_value="off"):
         z1 = flow.forward.flatten()
         J = tt.jacobian(z1, z0)
         logJdet = tt.log(tt.abs_(tt.nlinalg.det(J)))
