@@ -11,6 +11,7 @@
 #   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
+import sys
 
 import numpy as np
 import numpy.testing as npt
@@ -167,7 +168,7 @@ class TestMvNormalLogp:
         logp = logp_f(cov_val, delta_val)
         npt.assert_allclose(logp, expect)
 
-    @theano.configparser.change_flags(compute_test_value="ignore")
+    @theano.config.change_flags(compute_test_value="ignore")
     def test_grad(self):
         np.random.seed(42)
 
@@ -190,7 +191,7 @@ class TestMvNormalLogp:
         verify_grad(func, [chol_vec_val, delta_val])
 
     @pytest.mark.skip(reason="Fix in theano not released yet: Theano#5908")
-    @theano.configparser.change_flags(compute_test_value="ignore")
+    @theano.config.change_flags(compute_test_value="ignore")
     def test_hessian(self):
         chol_vec = tt.vector("chol_vec")
         chol_vec.tag.test_value = np.array([0.1, 2, 3])
@@ -209,14 +210,14 @@ class TestMvNormalLogp:
 
 
 class TestSplineWrapper:
-    @theano.configparser.change_flags(compute_test_value="ignore")
+    @theano.config.change_flags(compute_test_value="ignore")
     def test_grad(self):
         x = np.linspace(0, 1, 100)
         y = x * x
         spline = SplineWrapper(interpolate.InterpolatedUnivariateSpline(x, y, k=1))
         verify_grad(spline, [0.5])
 
-    @theano.configparser.change_flags(compute_test_value="ignore")
+    @theano.config.change_flags(compute_test_value="ignore")
     def test_hessian(self):
         x = np.linspace(0, 1, 100)
         y = x * x
@@ -228,7 +229,7 @@ class TestSplineWrapper:
 
 
 class TestI0e:
-    @theano.configparser.change_flags(compute_test_value="ignore")
+    @theano.config.change_flags(compute_test_value="ignore")
     def test_grad(self):
         verify_grad(i0e, [0.5])
         verify_grad(i0e, [-2.0])
@@ -236,7 +237,12 @@ class TestI0e:
         verify_grad(i0e, [[[0.5, -2.0]]])
 
 
-@pytest.mark.parametrize("dtype", ["float16", "float32", "float64", "float128"])
+@pytest.mark.parametrize(
+    "dtype",
+    ["float16", "float32", "float64", "float128"]
+    if sys.platform != "win32"
+    else ["float16", "float32", "float64"],
+)
 def test_clipped_beta_rvs(dtype):
     # Verify that the samples drawn from the beta distribution are never
     # equal to zero or one (issue #3898)

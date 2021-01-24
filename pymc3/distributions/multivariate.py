@@ -23,8 +23,9 @@ import theano
 import theano.tensor as tt
 
 from scipy import linalg, stats
-from theano.gof.op import get_test_value
-from theano.gof.utils import TestValueError
+from theano.graph.basic import Apply
+from theano.graph.op import Op, get_test_value
+from theano.graph.utils import TestValueError
 from theano.tensor.nlinalg import det, eigh, matrix_inverse, trace
 from theano.tensor.slinalg import Cholesky
 
@@ -471,32 +472,10 @@ class Dirichlet(Continuous):
 
         super().__init__(transform=transform, *args, **kwargs)
 
-        self.size_prefix = tuple(self.shape[:-1])
         self.a = a = tt.as_tensor_variable(a)
         self.mean = a / tt.sum(a)
 
         self.mode = tt.switch(tt.all(a > 1), (a - 1) / tt.sum(a - 1), np.nan)
-
-    def _random(self, a, size=None):
-        gen = stats.dirichlet.rvs
-        shape = tuple(np.atleast_1d(self.shape))
-        if size[-len(shape) :] == shape:
-            real_size = size[: -len(shape)]
-        else:
-            real_size = size
-        if self.size_prefix:
-            if real_size and real_size[0] == 1:
-                real_size = real_size[1:] + self.size_prefix
-            else:
-                real_size = real_size + self.size_prefix
-
-        if a.ndim == 1:
-            samples = gen(alpha=a, size=real_size)
-        else:
-            unrolled = a.reshape((np.prod(a.shape[:-1]), a.shape[-1]))
-            samples = np.array([gen(alpha=aa, size=1) for aa in unrolled])
-            samples = samples.reshape(a.shape)
-        return samples
 
     def random(self, point=None, size=None):
         """
@@ -516,7 +495,10 @@ class Dirichlet(Continuous):
         array
         """
         a = draw_values([self.a], point=point, size=size)[0]
-        samples = generate_samples(self._random, a=a, dist_shape=self.shape, size=size)
+        output_shape = to_tuple(size) + to_tuple(self.shape)
+        a = broadcast_dist_samples_to(to_shape=output_shape, samples=[a], size=size)[0]
+        samples = stats.gamma.rvs(a=a, size=output_shape)
+        samples = samples / samples.sum(-1, keepdims=True)
         return samples
 
     def logp(self, value):
@@ -854,7 +836,7 @@ def posdef(AA):
         return 0
 
 
-class PosDefMatrix(theano.Op):
+class PosDefMatrix(Op):
     """
     Check if input is positive definite. Input should be a square matrix.
 
@@ -869,7 +851,7 @@ class PosDefMatrix(theano.Op):
         x = tt.as_tensor_variable(x)
         assert x.ndim == 2
         o = tt.TensorType(dtype="int8", broadcastable=[])()
-        return theano.Apply(self, [x], [o])
+        return Apply(self, [x], [o])
 
     # Python implementation:
     def perform(self, node, inputs, outputs):

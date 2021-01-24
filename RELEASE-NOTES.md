@@ -1,19 +1,30 @@
 # Release Notes
 
 ## PyMC3 vNext (on deck)
-This release breaks some APIs w.r.t. `3.10.0`.
-It also brings some dreadfully awaited fixes, so be sure to go through the changes below.
-(Or latest when you run into problems.)
 
 ### Breaking Changes
-- Python 3.6 support was dropped (by no longer testing) and Python 3.9 was added (see [#4332](https://github.com/pymc-devs/pymc3/pull/4332)).
-- Changed shape behavior: __No longer collapse length 1 vector shape into scalars.__ (see [#4206](https://github.com/pymc-devs/pymc3/issue/4206) and [#4214](https://github.com/pymc-devs/pymc3/pull/4214))
+
+### New Features
+
+### Maintenance
+- `math.log1mexp_numpy` no longer raises RuntimeWarning when given very small inputs. These were commonly observed during NUTS sampling (see [#4428](https://github.com/pymc-devs/pymc3/pull/4428)).
+
+## PyMC3 3.11.0 (21 January 2021)
+
+This release breaks some APIs w.r.t. `3.10.0`. It also brings some dreadfully awaited fixes, so be sure to go through the (breaking) changes below.
+
+### Breaking Changes
+- ⚠ Many plotting and diagnostic functions that were just aliasing ArviZ functions were removed (see [4397](https://github.com/pymc-devs/pymc3/pull/4397/files#)). This includes `pm.summary`, `pm.traceplot`, `pm.ess` and many more!
+- ⚠ We now depend on `Theano-PyMC` version `1.1.0` exactly (see [#4405](https://github.com/pymc-devs/pymc3/pull/4405)). Major refactorings were done in `Theano-PyMC` 1.1.0. If you implement custom `Op`s or interact with Theano in any way yourself, make sure to read the [Theano-PyMC 1.1.0 release notes](https://github.com/pymc-devs/Theano-PyMC/releases/tag/rel-1.1.0).
+- ⚠ Python 3.6 support was dropped (by no longer testing) and Python 3.9 was added (see [#4332](https://github.com/pymc-devs/pymc3/pull/4332)).
+- ⚠ Changed shape behavior: __No longer collapse length 1 vector shape into scalars.__ (see [#4206](https://github.com/pymc-devs/pymc3/issue/4206) and [#4214](https://github.com/pymc-devs/pymc3/pull/4214))
   - __Applies to random variables and also the `.random(size=...)` kwarg!__
   - To create scalar variables you must now use `shape=None` or `shape=()`.
   - __`shape=(1,)` and `shape=1` now become vectors.__ Previously they were collapsed into scalars
   - 0-length dimensions are now ruled illegal for random variables and raise a `ValueError`.
 - In `sample_prior_predictive` the `vars` kwarg was removed in favor of `var_names` (see [#4327](https://github.com/pymc-devs/pymc3/pull/4327)).
 - Removed `theanof.set_theano_config` because it illegally changed Theano's internal state (see [#4329](https://github.com/pymc-devs/pymc3/pull/4329)).
+
 
 ### New Features
 - Option to set `check_bounds=False` when instantiating `pymc3.Model()`. This turns off bounds checks that ensure that input parameters of distributions are valid. For correctly specified models, this is unneccessary as all parameters get automatically transformed so that all values are valid. Turning this off should lead to faster sampling (see [#4377](https://github.com/pymc-devs/pymc3/pull/4377)).
@@ -23,6 +34,7 @@ It also brings some dreadfully awaited fixes, so be sure to go through the chang
 - Add `random` method to `MvGaussianRandomWalk` (see [#4388](https://github.com/pymc-devs/pymc3/pull/4388))
 - `AsymmetricLaplace` distribution added (see [#4392](https://github.com/pymc-devs/pymc3/pull/4392)).
 - `DirichletMultinomial` distribution added (see [#4373](https://github.com/pymc-devs/pymc3/pull/4373)).
+- Added a new `predict` method to `BART` to compute out of sample predictions (see [#4310](https://github.com/pymc-devs/pymc3/pull/4310)).
 
 ### Maintenance
 - Fixed bug whereby partial traces returns after keyboard interrupt during parallel sampling had fewer draws than would've been available [#4318](https://github.com/pymc-devs/pymc3/pull/4318)
@@ -32,8 +44,13 @@ It also brings some dreadfully awaited fixes, so be sure to go through the chang
 - Fixed mathematical formulation in `MvStudentT` random method. (see [#4359](https://github.com/pymc-devs/pymc3/pull/4359))
 - Fix issue in `logp` method of `HyperGeometric`. It now returns `-inf` for invalid parameters (see [4367](https://github.com/pymc-devs/pymc3/pull/4367))
 - Fixed `MatrixNormal` random method to work with parameters as random variables. (see [#4368](https://github.com/pymc-devs/pymc3/pull/4368))
-- Update the `logcdf` method of several continuous distributions to return -inf for invalid parameters and values, and raise an informative error when multiple values cannot be evaluated in a single call. (see [4393](https://github.com/pymc-devs/pymc3/pull/4393))
+- Update the `logcdf` method of several continuous distributions to return -inf for invalid parameters and values, and raise an informative error when multiple values cannot be evaluated in a single call. (see [4393](https://github.com/pymc-devs/pymc3/pull/4393) and [#4421](https://github.com/pymc-devs/pymc3/pull/4421))
 - Improve numerical stability in `logp` and `logcdf` methods of `ExGaussian` (see [#4407](https://github.com/pymc-devs/pymc3/pull/4407))
+- Issue UserWarning when doing prior or posterior predictive sampling with models containing Potential factors (see [#4419](https://github.com/pymc-devs/pymc3/pull/4419))
+- Dirichlet distribution's `random` method is now optimized and gives outputs in correct shape (see [#4416](https://github.com/pymc-devs/pymc3/pull/4407))
+- Attempting to sample a named model with SMC will now raise a `NotImplementedError`. (see [#4365](https://github.com/pymc-devs/pymc3/pull/4365))
+
+**Release manager** for 3.11.0: Eelke Spaak ([@Spaak](https://github.com/Spaak))
 
 ## PyMC3 3.10.0 (7 December 2020)
 

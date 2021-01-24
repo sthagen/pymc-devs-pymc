@@ -22,7 +22,8 @@ from typing import (
 )
 
 import numpy as np
-import theano
+import theano.graph.basic
+import theano.graph.fg
 import theano.tensor as tt
 
 from arviz import InferenceData
@@ -222,6 +223,14 @@ def fast_sample_posterior_predictive(
 
     model = modelcontext(model)
     assert model is not None
+
+    if model.potentials:
+        warnings.warn(
+            "The effect of Potentials on other parameters is ignored during posterior predictive sampling. "
+            "This is likely to lead to invalid or biased predictive samples.",
+            UserWarning,
+        )
+
     with model:
 
         if keep_size and samples is not None:
@@ -414,7 +423,7 @@ class _PosteriorPredictiveSampler(AbstractContextManager):
                         assert isinstance(value, np.ndarray)
                         givens[next_.name] = (next_, value)
                         drawn[(next_, samples)] = value
-                    except theano.gof.fg.MissingInputError:
+                    except theano.graph.fg.MissingInputError:
                         # The node failed, so we must add the node's parents to
                         # the stack of nodes to try to draw from. We exclude the
                         # nodes in the `params` list.
@@ -459,7 +468,7 @@ class _PosteriorPredictiveSampler(AbstractContextManager):
                             assert isinstance(value, np.ndarray)
                             self.evaluated[param_idx] = drawn[(param, samples)] = value
                             givens[param.name] = (param, value)
-                        except theano.gof.fg.MissingInputError:
+                        except theano.graph.fg.MissingInputError:
                             missing_inputs.add(param_idx)
         return [self.evaluated[j] for j in params]
 
@@ -653,7 +662,9 @@ class _PosteriorPredictiveSampler(AbstractContextManager):
                     variables = values = []
                 # We only truly care if the ancestors of param that were given
                 # value have the matching dshape and val.shape
-                param_ancestors = set(theano.gof.graph.ancestors([param], blockers=list(variables)))
+                param_ancestors = set(
+                    theano.graph.basic.ancestors([param], blockers=list(variables))
+                )
                 inputs = [
                     (var, val) for var, val in zip(variables, values) if var in param_ancestors
                 ]

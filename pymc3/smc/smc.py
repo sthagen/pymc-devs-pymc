@@ -177,6 +177,8 @@ class SMC:
         self.log_marginal_likelihood += logsumexp(log_weights_un) - np.log(self.draws)
         self.beta = new_beta
         self.weights = np.exp(log_weights)
+        # We normalize again to correct for small numerical errors that might build up
+        self.weights /= self.weights.sum()
 
     def resample(self):
         """Resample particles based on importance weights."""
@@ -255,7 +257,7 @@ class SMC:
         varnames = [v.name for v in self.variables]
 
         with self.model:
-            strace = NDArray(self.model)
+            strace = NDArray(name=self.model.name)
             strace.setup(lenght_pos, self.chain)
         for i in range(lenght_pos):
             value = []
