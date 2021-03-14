@@ -2,13 +2,17 @@
 
 ## PyMC3 vNext (TBD)
 ### Breaking Changes
-+ ...
+- ⚠ Theano-PyMC has been replaced with Aesara, so all external references to `theano`, `tt`, and `pymc3.theanof` need to be replaced with `aesara`, `aet`, and `pymc3.aesaraf` (see [4471](https://github.com/pymc-devs/pymc3/pull/4471)).
 
 ### New Features
 + `pm.math.cartesian` can now handle inputs that are themselves >1D (see [#4482](https://github.com/pymc-devs/pymc3/pull/4482)).
++ The `CAR` distribution has been added to allow for use of conditional autoregressions which often are used in spatial and network models.
 + ...
 
 ### Maintenance
+- The `pymc3.memoize` module was removed and replaced with `cachetools`.  The `hashable` function and `WithMemoization` class were moved to `pymc3.util` (see [#4509](https://github.com/pymc-devs/pymc3/pull/4509)).
+- Remove float128 dtype support (see [#4514](https://github.com/pymc-devs/pymc3/pull/4514)).
+- `pm.make_shared_replacements` now retains broadcasting information which fixes issues with Metropolis samplers (see [#4492](https://github.com/pymc-devs/pymc3/pull/4492)).
 + ...
 
 ## PyMC3 3.11.1 (12 February 2021)

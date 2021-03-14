@@ -15,14 +15,15 @@
 import itertools
 import sys
 
+import aesara
+import aesara.tensor as aet
 import numpy as np
 import numpy.random as nr
 import pytest
 import scipy.stats
 import scipy.stats.distributions as sp
-import theano
-import theano.tensor as tt
 
+from aesara.tensor.var import TensorVariable
 from numpy import array, exp, inf, log
 from numpy.testing import assert_allclose, assert_almost_equal, assert_equal
 from packaging.version import parse
@@ -32,9 +33,11 @@ from scipy.special import erf, logit
 
 import pymc3 as pm
 
+from pymc3.aesaraf import floatX
 from pymc3.blocking import DictToVarBijection
 from pymc3.distributions import (
     AR1,
+    CAR,
     AsymmetricLaplace,
     Bernoulli,
     Beta,
@@ -98,7 +101,6 @@ from pymc3.distributions import (
 from pymc3.math import kronecker, logsumexp
 from pymc3.model import Deterministic, Model, Point
 from pymc3.tests.helpers import select_by_precision
-from pymc3.theanof import floatX
 from pymc3.vartypes import continuous_types
 
 SCIPY_VERSION = parse(scipy_version)
@@ -126,7 +128,7 @@ class Domain:
     def __init__(self, vals, dtype=None, edges=None, shape=None):
         avals = array(vals, dtype=dtype)
         if dtype is None and not str(avals.dtype).startswith("int"):
-            avals = avals.astype(theano.config.floatX)
+            avals = avals.astype(aesara.config.floatX)
         vals = [array(v, dtype=avals.dtype) for v in vals]
 
         if edges is None:
@@ -769,9 +771,9 @@ class TestMatchesScipy:
                 err_msg=str(pt),
             )
 
-    def check_int_to_1(self, model, value, domain, paramdomains):
+    def check_int_to_1(self, model, value, domain, paramdomains, n_samples=10):
         pdf = model.fastfn(exp(model.logpt))
-        for pt in product(paramdomains, n_samples=10):
+        for pt in product(paramdomains, n_samples=n_samples):
             pt = Point(pt, value=value.tag.test_value, model=model)
             bij = DictToVarBijection(value, (), pt)
             pdfx = bij.mapf(pdf)
@@ -901,6 +903,7 @@ class TestMatchesScipy:
             R,
             {"mu": R, "sigma": Rplus},
             lambda value, mu, sigma: sp.norm.logcdf(value, mu, sigma),
+            decimal=select_by_precision(float64=6, float32=2),
         )
 
     def test_truncated_normal(self):
@@ -940,25 +943,6 @@ class TestMatchesScipy:
             lambda value, nu: sp.chi2.logpdf(value, df=nu),
         )
 
-    @pytest.mark.xfail(
-        condition=(theano.config.floatX == "float32"),
-        reason="Poor CDF in SciPy. See scipy/scipy#869 for details.",
-    )
-    def test_wald_scipy(self):
-        self.check_logp(
-            Wald,
-            Rplus,
-            {"mu": Rplus, "alpha": Rplus},
-            lambda value, mu, alpha: sp.invgauss.logpdf(value, mu=mu, loc=alpha),
-            decimal=select_by_precision(float64=6, float32=1),
-        )
-        self.check_logcdf(
-            Wald,
-            Rplus,
-            {"mu": Rplus, "alpha": Rplus},
-            lambda value, mu, alpha: sp.invgauss.logcdf(value, mu=mu, loc=alpha),
-        )
-
     @pytest.mark.parametrize(
         "value,mu,lam,phi,alpha,logp",
         [
@@ -978,7 +962,7 @@ class TestMatchesScipy:
             (50.0, 15.0, None, 0.666666, 10.0, -5.6481874),
         ],
     )
-    def test_wald(self, value, mu, lam, phi, alpha, logp):
+    def test_wald_logp_custom_points(self, value, mu, lam, phi, alpha, logp):
         # Log probabilities calculated using the dIG function from the R package gamlss.
         # See e.g., doi: 10.1111/j.1467-9876.2005.00510.x, or
         # http://www.gamlss.org/.
@@ -987,6 +971,27 @@ class TestMatchesScipy:
         pt = {"wald": value}
         decimals = select_by_precision(float64=6, float32=1)
         assert_almost_equal(model.fastlogp(pt), logp, decimal=decimals, err_msg=str(pt))
+
+    def test_wald_logp(self):
+        self.check_logp(
+            Wald,
+            Rplus,
+            {"mu": Rplus, "alpha": Rplus},
+            lambda value, mu, alpha: sp.invgauss.logpdf(value, mu=mu, loc=alpha),
+            decimal=select_by_precision(float64=6, float32=1),
+        )
+
+    @pytest.mark.xfail(
+        condition=(aesara.config.floatX == "float32"),
+        reason="Poor CDF in SciPy. See scipy/scipy#869 for details.",
+    )
+    def test_wald_logcdf(self):
+        self.check_logcdf(
+            Wald,
+            Rplus,
+            {"mu": Rplus, "alpha": Rplus},
+            lambda value, mu, alpha: sp.invgauss.logcdf(value, mu=mu, loc=alpha),
+        )
 
     def test_beta(self):
         self.check_logp(
@@ -1240,12 +1245,12 @@ class TestMatchesScipy:
         )
 
     @pytest.mark.xfail(
-        condition=(theano.config.floatX == "float32"),
+        condition=(aesara.config.floatX == "float32"),
         reason="Fails on float32 due to numerical issues",
     )
     def test_gamma_logcdf(self):
-        # pymc-devs/Theano-PyMC#224: skip_paramdomain_outside_edge_test has to be set
-        # True to avoid triggering a C-level assertion in the Theano GammaQ function
+        # pymc-devs/aesara#224: skip_paramdomain_outside_edge_test has to be set
+        # True to avoid triggering a C-level assertion in the Aesara GammaQ function
         # in gamma.c file. Can be set back to False (default) once that issue is solved
         self.check_logcdf(
             Gamma,
@@ -1255,19 +1260,23 @@ class TestMatchesScipy:
             skip_paramdomain_outside_edge_test=True,
         )
 
-    @pytest.mark.xfail(
-        condition=(theano.config.floatX == "float32"),
-        reason="Fails on float32 due to numerical issues",
-    )
-    def test_inverse_gamma(self):
+    def test_inverse_gamma_logp(self):
         self.check_logp(
             InverseGamma,
             Rplus,
             {"alpha": Rplus, "beta": Rplus},
             lambda value, alpha, beta: sp.invgamma.logpdf(value, alpha, scale=beta),
         )
-        # pymc-devs/Theano-PyMC#224: skip_paramdomain_outside_edge_test has to be set
-        # True to avoid triggering a C-level assertion in the Theano GammaQ function
+        # pymc-devs/aesara#224: skip_paramdomain_outside_edge_test has to be set
+        # True to avoid triggering a C-level assertion in the Aesara GammaQ function
+
+    @pytest.mark.xfail(
+        condition=(aesara.config.floatX == "float32"),
+        reason="Fails on float32 due to numerical issues",
+    )
+    def test_inverse_gamma_logcdf(self):
+        # pymc-devs/aesara#224: skip_paramdomain_outside_edge_test has to be set
+        # True to avoid triggering a C-level assertion in the Aesara GammaQ function
         # in gamma.c file. Can be set back to False (default) once that issue is solved
         self.check_logcdf(
             InverseGamma,
@@ -1278,7 +1287,7 @@ class TestMatchesScipy:
         )
 
     @pytest.mark.xfail(
-        condition=(theano.config.floatX == "float32"),
+        condition=(aesara.config.floatX == "float32"),
         reason="Fails on float32 due to scaling issues",
     )
     def test_inverse_gamma_alt_params(self):
@@ -1309,16 +1318,22 @@ class TestMatchesScipy:
         )
 
     @pytest.mark.xfail(
-        condition=(theano.config.floatX == "float32"),
+        condition=(aesara.config.floatX == "float32"),
         reason="Fails on float32 due to inf issues",
     )
-    def test_weibull(self):
+    def test_weibull_logp(self):
         self.check_logp(
             Weibull,
             Rplus,
             {"alpha": Rplusbig, "beta": Rplusbig},
             lambda value, alpha, beta: sp.exponweib.logpdf(value, 1, alpha, scale=beta),
         )
+
+    @pytest.mark.xfail(
+        condition=(aesara.config.floatX == "float32"),
+        reason="Fails on float32 due to inf issues",
+    )
+    def test_weibull_logcdf(self):
         self.check_logcdf(
             Weibull,
             Rplus,
@@ -1366,28 +1381,38 @@ class TestMatchesScipy:
         )
 
     # Too lazy to propagate decimal parameter through the whole chain of deps
-    @pytest.mark.xfail(condition=(theano.config.floatX == "float32"), reason="Fails on float32")
-    @pytest.mark.xfail(
-        condition=(SCIPY_VERSION < parse("1.4.0")), reason="betabinom is new in Scipy 1.4.0"
-    )
-    def test_beta_binomial(self):
+    @pytest.mark.xfail(condition=(aesara.config.floatX == "float32"), reason="Fails on float32")
+    def test_beta_binomial_distribution(self):
         self.checkd(
             BetaBinomial,
             Nat,
             {"alpha": Rplus, "beta": Rplus, "n": NatSmall},
         )
+
+    @pytest.mark.skipif(
+        condition=(SCIPY_VERSION < parse("1.4.0")), reason="betabinom is new in Scipy 1.4.0"
+    )
+    def test_beta_binomial_logp(self):
         self.check_logp(
             BetaBinomial,
             Nat,
             {"alpha": Rplus, "beta": Rplus, "n": NatSmall},
             lambda value, alpha, beta, n: sp.betabinom.logpmf(value, a=alpha, b=beta, n=n),
         )
+
+    @pytest.mark.xfail(condition=(aesara.config.floatX == "float32"), reason="Fails on float32")
+    @pytest.mark.skipif(
+        condition=(SCIPY_VERSION < parse("1.4.0")), reason="betabinom is new in Scipy 1.4.0"
+    )
+    def test_beta_binomial_logcdf(self):
         self.check_logcdf(
             BetaBinomial,
             Nat,
             {"alpha": Rplus, "beta": Rplus, "n": NatSmall},
             lambda value, alpha, beta, n: sp.betabinom.logcdf(value, a=alpha, b=beta, n=n),
         )
+
+    def test_beta_binomial_selfconsistency(self):
         self.check_selfconsistency_discrete_logcdf(
             BetaBinomial,
             Nat,
@@ -1474,13 +1499,18 @@ class TestMatchesScipy:
         self.check_logp(Constant, I, {"c": I}, lambda value, c: np.log(c == value))
 
     # Too lazy to propagate decimal parameter through the whole chain of deps
-    @pytest.mark.xfail(condition=(theano.config.floatX == "float32"), reason="Fails on float32")
-    def test_zeroinflatedpoisson(self):
+    @pytest.mark.xfail(
+        condition=(aesara.config.floatX == "float32"),
+        reason="Fails on float32 due to inf issues",
+    )
+    def test_zeroinflatedpoisson_distribution(self):
         self.checkd(
             ZeroInflatedPoisson,
             Nat,
             {"theta": Rplus, "psi": Unit},
         )
+
+    def test_zeroinflatedpoisson_logcdf(self):
         self.check_selfconsistency_discrete_logcdf(
             ZeroInflatedPoisson,
             Nat,
@@ -1488,13 +1518,18 @@ class TestMatchesScipy:
         )
 
     # Too lazy to propagate decimal parameter through the whole chain of deps
-    @pytest.mark.xfail(condition=(theano.config.floatX == "float32"), reason="Fails on float32")
-    def test_zeroinflatednegativebinomial(self):
+    @pytest.mark.xfail(
+        condition=(aesara.config.floatX == "float32"),
+        reason="Fails on float32 due to inf issues",
+    )
+    def test_zeroinflatednegativebinomial_distribution(self):
         self.checkd(
             ZeroInflatedNegativeBinomial,
             Nat,
             {"mu": Rplusbig, "alpha": Rplusbig, "psi": Unit},
         )
+
+    def test_zeroinflatednegativebinomial_logcdf(self):
         self.check_selfconsistency_discrete_logcdf(
             ZeroInflatedNegativeBinomial,
             Nat,
@@ -1503,13 +1538,14 @@ class TestMatchesScipy:
         )
 
     # Too lazy to propagate decimal parameter through the whole chain of deps
-    @pytest.mark.xfail(condition=(theano.config.floatX == "float32"), reason="Fails on float32")
-    def test_zeroinflatedbinomial(self):
+    def test_zeroinflatedbinomial_distribution(self):
         self.checkd(
             ZeroInflatedBinomial,
             Nat,
             {"n": NatSmall, "p": Unit, "psi": Unit},
         )
+
+    def test_zeroinflatedbinomial_logcdf(self):
         self.check_selfconsistency_discrete_logcdf(
             ZeroInflatedBinomial,
             Nat,
@@ -1570,28 +1606,28 @@ class TestMatchesScipy:
         )
 
     @pytest.mark.xfail(
-        condition=(theano.config.floatX == "float32"),
+        condition=(aesara.config.floatX == "float32"),
         reason="Fails on float32 due to inf issues",
     )
     def test_mvnormal_indef(self):
         cov_val = np.array([[1, 0.5], [0.5, -2]])
-        cov = tt.matrix("cov")
+        cov = aet.matrix("cov")
         cov.tag.test_value = np.eye(2)
         mu = floatX(np.zeros(2))
-        x = tt.vector("x")
+        x = aet.vector("x")
         x.tag.test_value = np.zeros(2)
         logp = MvNormal.dist(mu=mu, cov=cov).logp(x)
-        f_logp = theano.function([cov, x], logp)
+        f_logp = aesara.function([cov, x], logp)
         assert f_logp(cov_val, np.ones(2)) == -np.inf
-        dlogp = tt.grad(logp, cov)
-        f_dlogp = theano.function([cov, x], dlogp)
+        dlogp = aet.grad(logp, cov)
+        f_dlogp = aesara.function([cov, x], dlogp)
         assert not np.all(np.isfinite(f_dlogp(cov_val, np.ones(2))))
 
         logp = MvNormal.dist(mu=mu, tau=cov).logp(x)
-        f_logp = theano.function([cov, x], logp)
+        f_logp = aesara.function([cov, x], logp)
         assert f_logp(cov_val, np.ones(2)) == -np.inf
-        dlogp = tt.grad(logp, cov)
-        f_dlogp = theano.function([cov, x], dlogp)
+        dlogp = aet.grad(logp, cov)
+        f_dlogp = aesara.function([cov, x], dlogp)
         assert not np.all(np.isfinite(f_dlogp(cov_val, np.ones(2))))
 
     def test_mvnormal_init_fail(self):
@@ -1778,13 +1814,13 @@ class TestMatchesScipy:
             assert_almost_equal(pymc3_res[idx], scipy_res)
 
     def test_dirichlet_shape(self):
-        a = tt.as_tensor_variable(np.r_[1, 2])
+        a = aet.as_tensor_variable(np.r_[1, 2])
         with pytest.warns(DeprecationWarning):
             dir_rv = Dirichlet.dist(a)
             assert dir_rv.shape == (2,)
 
-        with pytest.warns(DeprecationWarning), theano.change_flags(compute_test_value="ignore"):
-            dir_rv = Dirichlet.dist(tt.vector())
+        with pytest.warns(DeprecationWarning), aesara.change_flags(compute_test_value="ignore"):
+            dir_rv = Dirichlet.dist(aet.vector())
 
     def test_dirichlet_2D(self):
         self.check_logp(
@@ -1925,16 +1961,16 @@ class TestMatchesScipy:
     def test_batch_multinomial(self):
         n = 10
         vals = np.zeros((4, 5, 3), dtype="int32")
-        p = np.zeros_like(vals, dtype=theano.config.floatX)
+        p = np.zeros_like(vals, dtype=aesara.config.floatX)
         inds = np.random.randint(vals.shape[-1], size=vals.shape[:-1])[..., None]
         np.put_along_axis(vals, inds, n, axis=-1)
         np.put_along_axis(p, inds, 1, axis=-1)
 
         dist = Multinomial.dist(n=n, p=p, shape=vals.shape)
-        value = tt.tensor3(dtype="int32")
+        value = aet.tensor3(dtype="int32")
         value.tag.test_value = np.zeros_like(vals, dtype="int32")
-        logp = tt.exp(dist.logp(value))
-        f = theano.function(inputs=[value], outputs=logp)
+        logp = aet.exp(dist.logp(value))
+        f = aesara.function(inputs=[value], outputs=logp)
         assert_almost_equal(
             f(vals),
             np.ones(vals.shape[:-1] + (1,)),
@@ -2063,7 +2099,7 @@ class TestMatchesScipy:
         # except for one category / dimension which is given the value of 1000
         n = 5
         vals = np.zeros((4, 5, 3), dtype="int32")
-        a = np.zeros_like(vals, dtype=theano.config.floatX) + 0.001
+        a = np.zeros_like(vals, dtype=aesara.config.floatX) + 0.001
         inds = np.random.randint(vals.shape[-1], size=vals.shape[:-1])[..., None]
         np.put_along_axis(vals, inds, n, axis=-1)
         np.put_along_axis(a, inds, 1000, axis=-1)
@@ -2213,7 +2249,7 @@ class TestMatchesScipy:
             skip_paramdomain_inside_edge_test=True,  # Valid values are tested above
         )
 
-    @pytest.mark.xfail(condition=(theano.config.floatX == "float32"), reason="Fails on float32")
+    @pytest.mark.xfail(condition=(aesara.config.floatX == "float32"), reason="Fails on float32")
     def test_vonmises(self):
         self.check_logp(
             VonMises,
@@ -2278,14 +2314,21 @@ class TestMatchesScipy:
             lambda value, b, sigma: sp.rice.logpdf(value, b=b, loc=0, scale=sigma),
         )
 
-    @pytest.mark.xfail(condition=(theano.config.floatX == "float32"), reason="Fails on float32")
-    def test_moyal(self):
+    def test_moyal_logp(self):
+        # Using a custom domain, because the standard `R` domain undeflows with scipy in float64
+        value_domain = Domain([-inf, -1.5, -1, -0.01, 0.0, 0.01, 1, 1.5, inf])
         self.check_logp(
             Moyal,
-            R,
+            value_domain,
             {"mu": R, "sigma": Rplusbig},
             lambda value, mu, sigma: floatX(sp.moyal.logpdf(value, mu, sigma)),
         )
+
+    @pytest.mark.xfail(
+        condition=(aesara.config.floatX == "float32"),
+        reason="Pymc3 underflows earlier than scipy on float32",
+    )
+    def test_moyal_logcdf(self):
         self.check_logcdf(
             Moyal,
             R,
@@ -2293,7 +2336,7 @@ class TestMatchesScipy:
             lambda value, mu, sigma: floatX(sp.moyal.logcdf(value, mu, sigma)),
         )
 
-    @pytest.mark.xfail(condition=(theano.config.floatX == "float32"), reason="Fails on float32")
+    @pytest.mark.xfail(condition=(aesara.config.floatX == "float32"), reason="Fails on float32")
     def test_interpolated(self):
         for mu in R.vals:
             for sigma in Rplus.vals:
@@ -2352,8 +2395,8 @@ def test_bound():
         a = ArrayNormal("c", shape=2)
         assert_equal(a.tag.test_value, np.array([1.5, 2.5]))
 
-    lower = tt.vector("lower")
-    lower.tag.test_value = np.array([1, 2]).astype(theano.config.floatX)
+    lower = aet.vector("lower")
+    lower.tag.test_value = np.array([1, 2]).astype(aesara.config.floatX)
     upper = 3
     ArrayNormal = Bound(Normal, lower=lower, upper=upper)
     dist = ArrayNormal.dist(mu=0, sigma=1, shape=2)
@@ -2421,7 +2464,7 @@ class TestStrAndLatexRepr:
             nb2 = pm.NegativeBinomial("nb_with_p_n", p=pm.Uniform("nbp"), n=10)
 
             # Expected value of outcome
-            mu = Deterministic("mu", floatX(alpha + tt.dot(X, b)))
+            mu = Deterministic("mu", floatX(alpha + aet.dot(X, b)))
 
             # add a bounded variable as well
             bound_var = Bound(Normal, lower=1.0)("bound_var", mu=0, sigma=10)
@@ -2572,6 +2615,42 @@ def test_orderedlogistic_dimensions(shape):
     assert np.allclose(ologp, expected)
 
 
+@pytest.mark.parametrize("shape", [(4,), (4, 1), (4, 4)], ids=str)
+def test_car_logp(shape):
+    """
+    Tests the log probability function for the CAR distribution by checking
+    against Scipy's multivariate normal logpdf, up to an additive constant.
+    The formula used by the CAR logp implementation omits several additive terms.
+    """
+    np.random.seed(1)
+
+    xs = np.random.randn(*shape)
+
+    # d x d adjacency matrix for a square (d=4) of rook-adjacent sites
+    W = np.array(
+        [[0.0, 1.0, 1.0, 0.0], [1.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 1.0, 0.0]]
+    )
+
+    tau = 2.0
+    alpha = 0.5
+    mu = np.zeros(4)
+
+    # Compute CAR covariance matrix and resulting MVN logp
+    D = W.sum(axis=0)
+    prec = tau * (np.diag(D) - alpha * W)
+    cov = np.linalg.inv(prec)
+    scipy_logp = scipy.stats.multivariate_normal.logpdf(xs, mu, cov)
+
+    car_logp = CAR.dist(mu, W, alpha, tau, shape=shape).logp(xs).eval()
+
+    # Check to make sure that the CAR and MVN log PDFs are equivalent
+    # up to an additive constant which is independent of the CAR parameters
+    delta_logp = scipy_logp - car_logp
+
+    # Check to make sure all the delta values are identical.
+    assert np.allclose(delta_logp - delta_logp[0], 0.0)
+
+
 class TestBugfixes:
     @pytest.mark.parametrize(
         "dist_cls,kwargs", [(MvNormal, dict(mu=0)), (MvStudentT, dict(mu=0, nu=2))]
@@ -2582,7 +2661,7 @@ class TestBugfixes:
 
         X = np.random.normal(size=(20, dims))
         actual_t = d.logp(X)
-        assert isinstance(actual_t, tt.TensorVariable)
+        assert isinstance(actual_t, TensorVariable)
         actual_a = actual_t.eval()
         assert isinstance(actual_a, np.ndarray)
         assert actual_a.shape == (X.shape[0],)

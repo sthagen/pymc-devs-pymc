@@ -25,10 +25,10 @@ from collections import defaultdict
 from copy import copy, deepcopy
 from typing import Any, Dict, Iterable, List, Optional, Set, Union, cast
 
+import aesara.gradient as tg
 import arviz
 import numpy as np
 import packaging
-import theano.gradient as tg
 import xarray
 
 from arviz import InferenceData
@@ -464,9 +464,10 @@ def sample(
         v = packaging.version.parse(pm.__version__)
         if v.release[0] > 3 or v.release[1] >= 10:  # type: ignore
             warnings.warn(
-                "In an upcoming release, pm.sample will return an `arviz.InferenceData` object instead of a `MultiTrace` by default. "
+                "In v4.0, pm.sample will return an `arviz.InferenceData` object instead of a `MultiTrace` by default. "
                 "You can pass return_inferencedata=True or return_inferencedata=False to be safe and silence this warning.",
                 FutureWarning,
+                stacklevel=2,
             )
         # set the default
         return_inferencedata = False
@@ -599,7 +600,7 @@ def sample(
     # count the number of tune/draw iterations that happened
     # ideally via the "tune" statistic, but not all samplers record it!
     if "tune" in trace.stat_names:
-        stat = trace.get_sampler_stats("tune", chains=0)
+        stat = trace.get_sampler_stats("tune", chains=chain_idx)
         # when CompoundStep is used, the stat is 2 dimensional!
         if len(stat.shape) == 2:
             stat = stat[:, 0]
@@ -1452,9 +1453,9 @@ def _mp_sample(
         # dict does not contain all parameters
         update_start_vals(start[idx - chain], model.test_point, model)
         if step.generates_stats and strace.supports_sampler_stats:
-            strace.setup(draws + tune, idx + chain, step.stats_dtypes)
+            strace.setup(draws + tune, idx, step.stats_dtypes)
         else:
-            strace.setup(draws + tune, idx + chain)
+            strace.setup(draws + tune, idx)
         traces.append(strace)
 
     sampler = ps.ParallelSampler(
@@ -1715,12 +1716,19 @@ def sample_posterior_predictive(
 
     ppc_trace_t = _DefaultTrace(samples)
     try:
+        if hasattr(_trace, "_straces"):
+            # trace dict is unordered, but we want to return ppc samples in
+            # a predictable ordering, so sort the chain indices
+            chain_idx_mapping = sorted(_trace._straces.keys())
         for idx in indices:
             if nchain > 1:
                 # the trace object will either be a MultiTrace (and have _straces)...
                 if hasattr(_trace, "_straces"):
                     chain_idx, point_idx = np.divmod(idx, len_trace)
-                    param = cast(MultiTrace, _trace)._straces[chain_idx % nchain].point(point_idx)
+                    chain_idx = chain_idx % nchain
+                    # chain indices might not always start at 0, convert to proper index
+                    chain_idx = chain_idx_mapping[chain_idx]
+                    param = cast(MultiTrace, _trace)._straces[chain_idx].point(point_idx)
                 # ... or a PointList
                 else:
                     param = cast(PointList, _trace)[idx % (len_trace * nchain)]
