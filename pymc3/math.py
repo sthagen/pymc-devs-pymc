@@ -58,6 +58,7 @@ from aesara.tensor import (
     or_,
     prod,
     sgn,
+    sigmoid,
     sin,
     sinh,
     sqr,
@@ -78,7 +79,6 @@ except ImportError:
 
 
 from aesara.tensor.nlinalg import det, matrix_dot, matrix_inverse, trace
-from aesara.tensor.nnet import sigmoid
 from scipy.linalg import block_diag as scipy_block_diag
 
 from pymc3.aesaraf import floatX, ix_, largest_common_dtype
@@ -229,7 +229,7 @@ def log1pexp(x):
 
     This function is numerically more stable than the naive approach.
     """
-    return at.nnet.softplus(x)
+    return at.softplus(x)
 
 
 def log1mexp(x):
@@ -319,7 +319,7 @@ def invprobit(x):
 def expand_packed_triangular(n, packed, lower=True, diagonal_only=False):
     r"""Convert a packed triangular matrix into a two dimensional array.
 
-    Triangular matrices can be stored with better space efficiancy by
+    Triangular matrices can be stored with better space efficiency by
     storing the non-zero values in a one-dimensional array. We number
     the elements by row like this (for lower or upper triangular matrices):
 
@@ -340,7 +340,7 @@ def expand_packed_triangular(n, packed, lower=True, diagonal_only=False):
         If true, return only the diagonal of the matrix.
     """
     if packed.ndim != 1:
-        raise ValueError("Packed triagular is not one dimensional.")
+        raise ValueError("Packed triangular is not one dimensional.")
     if not isinstance(n, int):
         raise TypeError("n must be an integer")
 

@@ -17,17 +17,40 @@
 A collection of common probability distributions for stochastic
 nodes in PyMC.
 """
-import warnings
+
+from typing import Union
 
 import aesara.tensor as at
 import numpy as np
 
+from aesara.assert_op import Assert
+from aesara.tensor.random.basic import (
+    BetaRV,
+    WeibullRV,
+    cauchy,
+    exponential,
+    gamma,
+    gumbel,
+    halfcauchy,
+    halfnormal,
+    invgamma,
+    laplace,
+    logistic,
+    lognormal,
+    normal,
+    pareto,
+    triangular,
+    uniform,
+    vonmises,
+)
+from aesara.tensor.random.op import RandomVariable
+from aesara.tensor.var import TensorVariable
 from scipy import stats
 from scipy.interpolate import InterpolatedUnivariateSpline
 from scipy.special import expit
 
 from pymc3.aesaraf import floatX
-from pymc3.distributions import transforms
+from pymc3.distributions import logp_transform, transforms
 from pymc3.distributions.dist_math import (
     SplineWrapper,
     betaln,
@@ -42,9 +65,10 @@ from pymc3.distributions.dist_math import (
     normal_lcdf,
     zvalue,
 )
-from pymc3.distributions.distribution import Continuous, draw_values, generate_samples
+from pymc3.distributions.distribution import Continuous
 from pymc3.distributions.special import log_i0
-from pymc3.math import invlogit, log1mexp, log1pexp, logdiffexp, logit
+from pymc3.math import log1mexp, log1pexp, logdiffexp, logit
+from pymc3.util import UNSET
 
 __all__ = [
     "Uniform",
@@ -85,57 +109,70 @@ __all__ = [
 class PositiveContinuous(Continuous):
     """Base class for positive continuous distributions"""
 
-    def __init__(self, transform=transforms.log, *args, **kwargs):
-        super().__init__(transform=transform, *args, **kwargs)
-
 
 class UnitContinuous(Continuous):
     """Base class for continuous distributions on [0,1]"""
 
-    def __init__(self, transform=transforms.logodds, *args, **kwargs):
-        super().__init__(transform=transform, *args, **kwargs)
+
+class CircularContinuous(Continuous):
+    """Base class for circular continuous distributions"""
+
+
+@logp_transform.register(PositiveContinuous)
+def pos_cont_transform(op):
+    return transforms.log
+
+
+@logp_transform.register(UnitContinuous)
+def unit_cont_transform(op):
+    return transforms.logodds
+
+
+@logp_transform.register(CircularContinuous)
+def circ_cont_transform(op):
+    return transforms.circular
 
 
 class BoundedContinuous(Continuous):
     """Base class for bounded continuous distributions"""
 
-    def __init__(self, transform="auto", lower=None, upper=None, *args, **kwargs):
+    # Indices of the arguments that define the lower and upper bounds of the distribution
+    bound_args_indices = None
 
-        lower = at.as_tensor_variable(lower) if lower is not None else None
-        upper = at.as_tensor_variable(upper) if upper is not None else None
+    def __new__(cls, *args, **kwargs):
+        transform = kwargs.get("transform", UNSET)
+        if transform is UNSET:
+            kwargs["transform"] = cls.default_transform()
+        return super().__new__(cls, *args, **kwargs)
 
-        if transform == "auto":
-            if lower is None and upper is None:
-                transform = None
-            elif lower is not None and upper is None:
-                transform = transforms.lowerbound(lower)
-            elif lower is None and upper is not None:
-                transform = transforms.upperbound(upper)
-            else:
-                transform = transforms.interval(lower, upper)
+    @classmethod
+    def default_transform(cls):
+        if cls.bound_args_indices is None:
+            raise ValueError(
+                f"Must specify bound_args_indices for {cls.__name__} bounded distribution"
+            )
 
-        super().__init__(transform=transform, *args, **kwargs)
+        def transform_params(rv_var):
+            _, _, _, *args = rv_var.owner.inputs
+
+            lower, upper = None, None
+            if cls.bound_args_indices[0] is not None:
+                lower = args[cls.bound_args_indices[0]]
+            if cls.bound_args_indices[1] is not None:
+                upper = args[cls.bound_args_indices[1]]
+
+            lower = at.as_tensor_variable(lower) if lower is not None else None
+            upper = at.as_tensor_variable(upper) if upper is not None else None
+
+            return lower, upper
+
+        return transforms.interval(transform_params)
 
 
 def assert_negative_support(var, label, distname, value=-1e-6):
-    # Checks for evidence of positive support for a variable
-    if var is None:
-        return
-    try:
-        # Transformed distribution
-        support = np.isfinite(var.transformed.distribution.dist.logp(value).tag.test_value)
-    except AttributeError:
-        try:
-            # Untransformed distribution
-            support = np.isfinite(var.distribution.logp(value).tag.test_value)
-        except AttributeError:
-            # Otherwise no direct evidence of non-positive support
-            support = False
-
-    if np.any(support):
-        msg = f"The variable specified for {label} has negative support for {distname}, "
-        msg += "likely making it unsuitable for this parameter."
-        warnings.warn(msg)
+    msg = f"The variable specified for {label} has negative support for {distname}, "
+    msg += "likely making it unsuitable for this parameter."
+    return Assert(msg)(var, at.all(at.ge(var, 0.0)))
 
 
 def get_tau_sigma(tau=None, sigma=None):
@@ -171,11 +208,6 @@ def get_tau_sigma(tau=None, sigma=None):
             raise ValueError("Can't pass both tau and sigma")
         else:
             sigma = tau ** -0.5
-
-    # cast tau and sigma to float in a way that works for both np.arrays
-    # and pure python
-    tau = 1.0 * tau
-    sigma = 1.0 * sigma
 
     return floatX(tau), floatX(sigma)
 
@@ -222,39 +254,16 @@ class Uniform(BoundedContinuous):
     upper: float
         Upper limit.
     """
+    rv_op = uniform
+    bound_args_indices = (0, 1)  # Lower, Upper
 
-    def __init__(self, lower=0, upper=1, *args, **kwargs):
-        self.lower = lower = at.as_tensor_variable(floatX(lower))
-        self.upper = upper = at.as_tensor_variable(floatX(upper))
-        self.mean = (upper + lower) / 2.0
-        self.median = self.mean
+    @classmethod
+    def dist(cls, lower=0, upper=1, **kwargs):
+        lower = at.as_tensor_variable(floatX(lower))
+        upper = at.as_tensor_variable(floatX(upper))
+        return super().dist([lower, upper], **kwargs)
 
-        super().__init__(lower=lower, upper=upper, *args, **kwargs)
-
-    def random(self, point=None, size=None):
-        """
-        Draw random values from Uniform distribution.
-
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-
-        lower, upper = draw_values([self.lower, self.upper], point=point, size=size)
-        return generate_samples(
-            stats.uniform.rvs, loc=lower, scale=upper - lower, dist_shape=self.shape, size=size
-        )
-
-    def logp(self, value):
+    def logp(value, lower, upper):
         """
         Calculate log-probability of Uniform distribution at specified value.
 
@@ -267,32 +276,27 @@ class Uniform(BoundedContinuous):
         -------
         TensorVariable
         """
-        lower = self.lower
-        upper = self.upper
         return bound(
             at.fill(value, -at.log(upper - lower)),
             value >= lower,
             value <= upper,
         )
 
-    def logcdf(self, value):
+    def logcdf(value, lower, upper):
         """
         Compute the log of the cumulative distribution function for Uniform distribution
         at the specified value.
 
         Parameters
         ----------
-        value: numeric or np.ndarray or aesara.tensor
+        value: numeric or np.ndarray or `TensorVariable`
             Value(s) for which log CDF is calculated. If the log CDF for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor.
+            values are desired the values must be provided in a numpy array or `TensorVariable`.
 
         Returns
         -------
         TensorVariable
         """
-        lower = self.lower
-        upper = self.upper
-
         return at.switch(
             at.lt(value, lower) | at.lt(upper, lower),
             -np.inf,
@@ -304,31 +308,38 @@ class Uniform(BoundedContinuous):
         )
 
 
+class FlatRV(RandomVariable):
+    name = "flat"
+    ndim_supp = 0
+    ndims_params = []
+    dtype = "floatX"
+    _print_name = ("Flat", "\\operatorname{Flat}")
+
+    @classmethod
+    def rng_fn(cls, rng, size):
+        raise NotImplementedError("Cannot sample from flat variable")
+
+
+flat = FlatRV()
+
+
 class Flat(Continuous):
     """
     Uninformative log-likelihood that returns 0 regardless of
     the passed value.
     """
 
-    def __init__(self, *args, **kwargs):
-        self._default = 0
-        super().__init__(defaults=("_default",), *args, **kwargs)
+    rv_op = flat
 
-    def random(self, point=None, size=None):
-        """Raises ValueError as it is not possible to sample from Flat distribution
+    @classmethod
+    def dist(cls, *, size=None, initval=None, **kwargs):
+        if initval is None:
+            initval = np.full(size, floatX(0.0))
+        res = super().dist([], size=size, **kwargs)
+        res.tag.test_value = initval
+        return res
 
-        Parameters
-        ----------
-        point: dict, optional
-        size: int, optional
-
-        Raises
-        -------
-        ValueError
-        """
-        raise ValueError("Cannot sample from Flat distribution")
-
-    def logp(self, value):
+    def logp(value):
         """
         Calculate log-probability of Flat distribution at specified value.
 
@@ -336,7 +347,7 @@ class Flat(Continuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
@@ -344,7 +355,7 @@ class Flat(Continuous):
         """
         return at.zeros_like(value)
 
-    def logcdf(self, value):
+    def logcdf(value):
         """
         Compute the log of the cumulative distribution function for Flat distribution
         at the specified value.
@@ -353,7 +364,7 @@ class Flat(Continuous):
         ----------
         value: numeric or np.ndarray or aesara.tensor
             Value(s) for which log CDF is calculated. If the log CDF for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor.
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
@@ -364,28 +375,35 @@ class Flat(Continuous):
         )
 
 
+class HalfFlatRV(RandomVariable):
+    name = "half_flat"
+    ndim_supp = 0
+    ndims_params = []
+    dtype = "floatX"
+    _print_name = ("HalfFlat", "\\operatorname{HalfFlat}")
+
+    @classmethod
+    def rng_fn(cls, rng, size):
+        raise NotImplementedError("Cannot sample from half_flat variable")
+
+
+halfflat = HalfFlatRV()
+
+
 class HalfFlat(PositiveContinuous):
     """Improper flat prior over the positive reals."""
 
-    def __init__(self, *args, **kwargs):
-        self._default = 1
-        super().__init__(defaults=("_default",), *args, **kwargs)
+    rv_op = halfflat
 
-    def random(self, point=None, size=None):
-        """Raises ValueError as it is not possible to sample from HalfFlat distribution
+    @classmethod
+    def dist(cls, *, size=None, initval=None, **kwargs):
+        if initval is None:
+            initval = np.full(size, floatX(1.0))
+        res = super().dist([], size=size, **kwargs)
+        res.tag.test_value = initval
+        return res
 
-        Parameters
-        ----------
-        point: dict, optional
-        size: int, optional
-
-        Raises
-        -------
-        ValueError
-        """
-        raise ValueError("Cannot sample from HalfFlat distribution")
-
-    def logp(self, value):
+    def logp(value):
         """
         Calculate log-probability of HalfFlat distribution at specified value.
 
@@ -393,7 +411,7 @@ class HalfFlat(PositiveContinuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
@@ -401,7 +419,7 @@ class HalfFlat(PositiveContinuous):
         """
         return bound(at.zeros_like(value), value > 0)
 
-    def logcdf(self, value):
+    def logcdf(value):
         """
         Compute the log of the cumulative distribution function for HalfFlat distribution
         at the specified value.
@@ -410,7 +428,7 @@ class HalfFlat(PositiveContinuous):
         ----------
         value: numeric or np.ndarray or aesara.tensor
             Value(s) for which log CDF is calculated. If the log CDF for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor.
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
@@ -482,45 +500,26 @@ class Normal(Continuous):
         with pm.Model():
             x = pm.Normal('x', mu=0, tau=1/23)
     """
+    rv_op = normal
 
-    def __init__(self, mu=0, sigma=None, tau=None, sd=None, **kwargs):
+    @classmethod
+    def dist(cls, mu=0, sigma=None, tau=None, sd=None, no_assert=False, **kwargs):
         if sd is not None:
             sigma = sd
         tau, sigma = get_tau_sigma(tau=tau, sigma=sigma)
-        self.sigma = self.sd = at.as_tensor_variable(sigma)
-        self.tau = at.as_tensor_variable(tau)
+        sigma = at.as_tensor_variable(sigma)
 
-        self.mean = self.median = self.mode = self.mu = mu = at.as_tensor_variable(floatX(mu))
-        self.variance = 1.0 / self.tau
+        # sd = sigma
+        # tau = at.as_tensor_variable(tau)
+        # mean = median = mode = mu = at.as_tensor_variable(floatX(mu))
+        # variance = 1.0 / self.tau
 
-        assert_negative_support(sigma, "sigma", "Normal")
-        assert_negative_support(tau, "tau", "Normal")
+        if not no_assert:
+            assert_negative_support(sigma, "sigma", "Normal")
 
-        super().__init__(**kwargs)
+        return super().dist([mu, sigma], **kwargs)
 
-    def random(self, point=None, size=None):
-        """
-        Draw random values from Normal distribution.
-
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        mu, tau, _ = draw_values([self.mu, self.tau, self.sigma], point=point, size=size)
-        return generate_samples(
-            stats.norm.rvs, loc=mu, scale=tau ** -0.5, dist_shape=self.shape, size=size
-        )
-
-    def logp(self, value):
+    def logp(value, mu, sigma):
         """
         Calculate log-probability of Normal distribution at specified value.
 
@@ -528,38 +527,31 @@ class Normal(Continuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or `TensorVariable`.
 
         Returns
         -------
         TensorVariable
         """
-        sigma = self.sigma
-        tau = self.tau
-        mu = self.mu
+        tau, sigma = get_tau_sigma(tau=None, sigma=sigma)
 
         return bound((-tau * (value - mu) ** 2 + at.log(tau / np.pi / 2.0)) / 2.0, sigma > 0)
 
-    def _distr_parameters_for_repr(self):
-        return ["mu", "sigma"]
-
-    def logcdf(self, value):
+    def logcdf(value, mu, sigma):
         """
         Compute the log of the cumulative distribution function for Normal distribution
         at the specified value.
 
         Parameters
         ----------
-        value: numeric or np.ndarray or aesara.tensor
+        value: numeric or np.ndarray or `TensorVariable`
             Value(s) for which log CDF is calculated. If the log CDF for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor.
+            values are desired the values must be provided in a numpy array or `TensorVariable`.
 
         Returns
         -------
         TensorVariable
         """
-        mu = self.mu
-        sigma = self.sigma
         return bound(
             normal_lcdf(mu, sigma, value),
             0 < sigma,
@@ -708,18 +700,18 @@ class TruncatedNormal(BoundedContinuous):
         -------
         array
         """
-        mu, sigma, lower, upper = draw_values(
-            [self.mu, self.sigma, self.lower, self.upper], point=point, size=size
-        )
-        return generate_samples(
-            self._random,
-            mu=mu,
-            sigma=sigma,
-            lower=lower,
-            upper=upper,
-            dist_shape=self.shape,
-            size=size,
-        )
+        # mu, sigma, lower, upper = draw_values(
+        #     [self.mu, self.sigma, self.lower, self.upper], point=point, size=size
+        # )
+        # return generate_samples(
+        #     self._random,
+        #     mu=mu,
+        #     sigma=sigma,
+        #     lower=lower,
+        #     upper=upper,
+        #     dist_shape=self.shape,
+        #     size=size,
+        # )
 
     def _random(self, mu, sigma, lower, upper, size):
         """Wrapper around stats.truncnorm.rvs that converts TruncatedNormal's
@@ -739,7 +731,7 @@ class TruncatedNormal(BoundedContinuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
@@ -844,45 +836,21 @@ class HalfNormal(PositiveContinuous):
         with pm.Model():
             x = pm.HalfNormal('x', tau=1/15)
     """
+    rv_op = halfnormal
 
-    def __init__(self, sigma=None, tau=None, sd=None, *args, **kwargs):
+    @classmethod
+    def dist(cls, sigma=None, tau=None, sd=None, *args, **kwargs):
         if sd is not None:
             sigma = sd
-        super().__init__(*args, **kwargs)
+
         tau, sigma = get_tau_sigma(tau=tau, sigma=sigma)
-
-        self.sigma = self.sd = sigma = at.as_tensor_variable(sigma)
-        self.tau = tau = at.as_tensor_variable(tau)
-
-        self.mean = at.sqrt(2 / (np.pi * self.tau))
-        self.variance = (1.0 - 2 / np.pi) / self.tau
 
         assert_negative_support(tau, "tau", "HalfNormal")
         assert_negative_support(sigma, "sigma", "HalfNormal")
 
-    def random(self, point=None, size=None):
-        """
-        Draw random values from HalfNormal distribution.
+        return super().dist([0.0, sigma], **kwargs)
 
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        sigma = draw_values([self.sigma], point=point, size=size)[0]
-        return generate_samples(
-            stats.halfnorm.rvs, loc=0.0, scale=sigma, dist_shape=self.shape, size=size
-        )
-
-    def logp(self, value):
+    def logp(value, loc, sigma):
         """
         Calculate log-probability of HalfNormal distribution at specified value.
 
@@ -890,25 +858,22 @@ class HalfNormal(PositiveContinuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
         TensorVariable
         """
-        tau = self.tau
-        sigma = self.sigma
+        tau, sigma = get_tau_sigma(tau=None, sigma=sigma)
+
         return bound(
-            -0.5 * tau * value ** 2 + 0.5 * at.log(tau * 2.0 / np.pi),
-            value >= 0,
+            -0.5 * tau * (value - loc) ** 2 + 0.5 * at.log(tau * 2.0 / np.pi),
+            value >= loc,
             tau > 0,
             sigma > 0,
         )
 
-    def _distr_parameters_for_repr(self):
-        return ["sigma"]
-
-    def logcdf(self, value):
+    def logcdf(value, loc, sigma):
         """
         Compute the log of the cumulative distribution function for HalfNormal distribution
         at the specified value.
@@ -917,19 +882,21 @@ class HalfNormal(PositiveContinuous):
         ----------
         value: numeric or np.ndarray or aesara.tensor
             Value(s) for which log CDF is calculated. If the log CDF for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor.
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
         TensorVariable
         """
-        sigma = self.sigma
-        z = zvalue(value, mu=0, sigma=sigma)
+        z = zvalue(value, mu=loc, sigma=sigma)
         return bound(
             at.log1p(-at.erfc(z / at.sqrt(2.0))),
-            0 <= value,
+            loc <= value,
             0 < sigma,
         )
+
+    def _distr_parameters_for_repr(self):
+        return ["sigma"]
 
 
 class Wald(PositiveContinuous):
@@ -1078,8 +1045,8 @@ class Wald(PositiveContinuous):
         -------
         array
         """
-        mu, lam, alpha = draw_values([self.mu, self.lam, self.alpha], point=point, size=size)
-        return generate_samples(self._random, mu, lam, alpha, dist_shape=self.shape, size=size)
+        # mu, lam, alpha = draw_values([self.mu, self.lam, self.alpha], point=point, size=size)
+        # return generate_samples(self._random, mu, lam, alpha, dist_shape=self.shape, size=size)
 
     def logp(self, value):
         """
@@ -1089,7 +1056,7 @@ class Wald(PositiveContinuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
@@ -1104,8 +1071,6 @@ class Wald(PositiveContinuous):
             logpow(lam / (2.0 * np.pi), 0.5)
             - logpow(centered_value, 1.5)
             - (0.5 * lam / centered_value * ((centered_value - mu) / mu) ** 2),
-            # XXX these two are redundant. Please, check.
-            value > 0,
             centered_value > 0,
             mu > 0,
             lam > 0,
@@ -1124,7 +1089,7 @@ class Wald(PositiveContinuous):
         ----------
         value: numeric or np.ndarray or aesara.tensor
             Value(s) for which log CDF is calculated. If the log CDF for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor.
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
@@ -1154,6 +1119,15 @@ class Wald(PositiveContinuous):
             0 < lam,
             0 <= alpha,
         )
+
+
+class BetaClippedRV(BetaRV):
+    @classmethod
+    def rng_fn(cls, rng, alpha, beta, size):
+        return clipped_beta_rvs(alpha, beta, size=size, random_state=rng)
+
+
+beta = BetaClippedRV()
 
 
 class Beta(UnitContinuous):
@@ -1220,22 +1194,23 @@ class Beta(UnitContinuous):
     the binomial distribution.
     """
 
-    def __init__(self, alpha=None, beta=None, mu=None, sigma=None, sd=None, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    rv_op = beta
+
+    @classmethod
+    def dist(cls, alpha=None, beta=None, mu=None, sigma=None, sd=None, *args, **kwargs):
         if sd is not None:
             sigma = sd
-        alpha, beta = self.get_alpha_beta(alpha, beta, mu, sigma)
-        self.alpha = alpha = at.as_tensor_variable(floatX(alpha))
-        self.beta = beta = at.as_tensor_variable(floatX(beta))
 
-        self.mean = self.alpha / (self.alpha + self.beta)
-        self.variance = (
-            self.alpha * self.beta / ((self.alpha + self.beta) ** 2 * (self.alpha + self.beta + 1))
-        )
+        alpha, beta = cls.get_alpha_beta(alpha, beta, mu, sigma)
+        alpha = at.as_tensor_variable(floatX(alpha))
+        beta = at.as_tensor_variable(floatX(beta))
 
         assert_negative_support(alpha, "alpha", "Beta")
         assert_negative_support(beta, "beta", "Beta")
 
+        return super().dist([alpha, beta], **kwargs)
+
+    @classmethod
     def get_alpha_beta(self, alpha=None, beta=None, mu=None, sigma=None):
         if (alpha is not None) and (beta is not None):
             pass
@@ -1251,27 +1226,10 @@ class Beta(UnitContinuous):
 
         return alpha, beta
 
-    def random(self, point=None, size=None):
-        """
-        Draw random values from Beta distribution.
+    def _distr_parameters_for_repr(self):
+        return ["alpha", "beta"]
 
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        alpha, beta = draw_values([self.alpha, self.beta], point=point, size=size)
-        return generate_samples(clipped_beta_rvs, alpha, beta, dist_shape=self.shape, size=size)
-
-    def logp(self, value):
+    def logp(value, alpha, beta):
         """
         Calculate log-probability of Beta distribution at specified value.
 
@@ -1279,14 +1237,12 @@ class Beta(UnitContinuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
         TensorVariable
         """
-        alpha = self.alpha
-        beta = self.beta
 
         logval = at.log(value)
         log1pval = at.log1p(-value)
@@ -1298,7 +1254,7 @@ class Beta(UnitContinuous):
 
         return bound(logp, value >= 0, value <= 1, alpha > 0, beta > 0)
 
-    def logcdf(self, value):
+    def logcdf(value, alpha, beta):
         """
         Compute the log of the cumulative distribution function for Beta distribution
         at the specified value.
@@ -1318,22 +1274,32 @@ class Beta(UnitContinuous):
                 f"Beta.logcdf expects a scalar value but received a {np.ndim(value)}-dimensional object."
             )
 
-        a = self.alpha
-        b = self.beta
-
         return bound(
             at.switch(
                 at.lt(value, 1),
-                at.log(incomplete_beta(a, b, value)),
+                at.log(incomplete_beta(alpha, beta, value)),
                 0,
             ),
             0 <= value,
-            0 < a,
-            0 < b,
+            0 < alpha,
+            0 < beta,
         )
 
-    def _distr_parameters_for_repr(self):
-        return ["alpha", "beta"]
+
+class KumaraswamyRV(RandomVariable):
+    name = "kumaraswamy"
+    ndim_supp = 0
+    ndims_params = [0, 0]
+    dtype = "floatX"
+    _print_name = ("Kumaraswamy", "\\operatorname{Kumaraswamy}")
+
+    @classmethod
+    def rng_fn(cls, rng, a, b, size):
+        u = rng.uniform(size=size)
+        return (1 - (1 - u) ** (1 / b)) ** (1 / a)
+
+
+kumaraswamy = KumaraswamyRV()
 
 
 class Kumaraswamy(UnitContinuous):
@@ -1378,48 +1344,19 @@ class Kumaraswamy(UnitContinuous):
     b: float
         b > 0.
     """
+    rv_op = kumaraswamy
 
-    def __init__(self, a, b, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        self.a = a = at.as_tensor_variable(floatX(a))
-        self.b = b = at.as_tensor_variable(floatX(b))
-
-        ln_mean = at.log(b) + at.gammaln(1 + 1 / a) + at.gammaln(b) - at.gammaln(1 + 1 / a + b)
-        self.mean = at.exp(ln_mean)
-        ln_2nd_raw_moment = (
-            at.log(b) + at.gammaln(1 + 2 / a) + at.gammaln(b) - at.gammaln(1 + 2 / a + b)
-        )
-        self.variance = at.exp(ln_2nd_raw_moment) - self.mean ** 2
+    @classmethod
+    def dist(cls, a, b, *args, **kwargs):
+        a = at.as_tensor_variable(floatX(a))
+        b = at.as_tensor_variable(floatX(b))
 
         assert_negative_support(a, "a", "Kumaraswamy")
         assert_negative_support(b, "b", "Kumaraswamy")
 
-    def _random(self, a, b, size=None):
-        u = np.random.uniform(size=size)
-        return (1 - (1 - u) ** (1 / b)) ** (1 / a)
+        return super().dist([a, b], *args, **kwargs)
 
-    def random(self, point=None, size=None):
-        """
-        Draw random values from Kumaraswamy distribution.
-
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        a, b = draw_values([self.a, self.b], point=point, size=size)
-        return generate_samples(self._random, a, b, dist_shape=self.shape, size=size)
-
-    def logp(self, value):
+    def logp(value, a, b):
         """
         Calculate log-probability of Kumaraswamy distribution at specified value.
 
@@ -1427,18 +1364,34 @@ class Kumaraswamy(UnitContinuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
         TensorVariable
         """
-        a = self.a
-        b = self.b
-
         logp = at.log(a) + at.log(b) + (a - 1) * at.log(value) + (b - 1) * at.log(1 - value ** a)
 
         return bound(logp, value >= 0, value <= 1, a > 0, b > 0)
+
+    def logcdf(value, a, b):
+        r"""
+        Compute the log of cumulative distribution function for the Kumaraswamy distribution
+        at the specified value.
+
+        Parameters
+        ----------
+        value: numeric or np.ndarray or aesara.tensor
+            Value(s) for which log CDF is calculated. If the log CDF for
+            multiple values are desired the values must be provided in a numpy
+            array or Aesara tensor.
+
+        Returns
+        -------
+        TensorVariable
+        """
+        logcdf = log1mexp(-(b * at.log1p(-(value ** a))))
+        return bound(at.switch(value < 1, logcdf, 0), value >= 0, a > 0, b > 0)
 
 
 class Exponential(PositiveContinuous):
@@ -1478,58 +1431,40 @@ class Exponential(PositiveContinuous):
     lam: float
         Rate or inverse scale (lam > 0)
     """
+    rv_op = exponential
 
-    def __init__(self, lam, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.lam = lam = at.as_tensor_variable(floatX(lam))
-        self.mean = 1.0 / self.lam
-        self.median = self.mean * at.log(2)
-        self.mode = at.zeros_like(self.lam)
-
-        self.variance = self.lam ** -2
+    @classmethod
+    def dist(cls, lam, *args, **kwargs):
+        lam = at.as_tensor_variable(floatX(lam))
 
         assert_negative_support(lam, "lam", "Exponential")
 
-    def random(self, point=None, size=None):
-        """
-        Draw random values from Exponential distribution.
+        # Aesara exponential op is parametrized in terms of mu (1/lam)
+        return super().dist([at.inv(lam)], **kwargs)
 
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        lam = draw_values([self.lam], point=point, size=size)[0]
-        return generate_samples(
-            np.random.exponential, scale=1.0 / lam, dist_shape=self.shape, size=size
-        )
-
-    def logp(self, value):
+    def logp(value, mu):
         """
         Calculate log-probability of Exponential distribution at specified value.
 
         Parameters
         ----------
         value: numeric
-            Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            Value(s) for which log-probability is calculated. If the log
+            probabilities for multiple values are desired the values must be
+            provided in a numpy array or Aesara tensor
 
         Returns
         -------
         TensorVariable
         """
-        lam = self.lam
-        return bound(at.log(lam) - lam * value, value >= 0, lam > 0)
+        lam = at.inv(mu)
+        return bound(
+            at.log(lam) - lam * value,
+            value >= 0,
+            lam > 0,
+        )
 
-    def logcdf(self, value):
+    def logcdf(value, mu):
         r"""
         Compute the log of cumulative distribution function for the Exponential distribution
         at the specified value.
@@ -1537,18 +1472,17 @@ class Exponential(PositiveContinuous):
         Parameters
         ----------
         value: numeric or np.ndarray or aesara.tensor
-            Value(s) for which log CDF is calculated. If the log CDF for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor.
+            Value(s) for which log CDF is calculated. If the log CDF for
+            multiple values are desired the values must be provided in a numpy
+            array or Aesara tensor.
 
         Returns
         -------
         TensorVariable
         """
-        value = floatX(at.as_tensor(value))
-        lam = self.lam
-        a = lam * value
+        lam = at.inv(mu)
         return bound(
-            log1mexp(a),
+            log1mexp(lam * value),
             0 <= value,
             0 <= lam,
         )
@@ -1596,37 +1530,17 @@ class Laplace(Continuous):
     b: float
         Scale parameter (b > 0).
     """
+    rv_op = laplace
 
-    def __init__(self, mu, b, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.b = b = at.as_tensor_variable(floatX(b))
-        self.mean = self.median = self.mode = self.mu = mu = at.as_tensor_variable(floatX(mu))
-
-        self.variance = 2 * self.b ** 2
+    @classmethod
+    def dist(cls, mu, b, *args, **kwargs):
+        b = at.as_tensor_variable(floatX(b))
+        mu = at.as_tensor_variable(floatX(mu))
 
         assert_negative_support(b, "b", "Laplace")
+        return super().dist([mu, b], *args, **kwargs)
 
-    def random(self, point=None, size=None):
-        """
-        Draw random values from Laplace distribution.
-
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        mu, b = draw_values([self.mu, self.b], point=point, size=size)
-        return generate_samples(np.random.laplace, mu, b, dist_shape=self.shape, size=size)
-
-    def logp(self, value):
+    def logp(value, mu, b):
         """
         Calculate log-probability of Laplace distribution at specified value.
 
@@ -1634,18 +1548,15 @@ class Laplace(Continuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
         TensorVariable
         """
-        mu = self.mu
-        b = self.b
-
         return -at.log(2 * b) - abs(value - mu) / b
 
-    def logcdf(self, value):
+    def logcdf(value, mu, b):
         """
         Compute the log of the cumulative distribution function for Laplace distribution
         at the specified value.
@@ -1654,18 +1565,16 @@ class Laplace(Continuous):
         ----------
         value: numeric or np.ndarray or aesara.tensor
             Value(s) for which log CDF is calculated. If the log CDF for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor.
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
         TensorVariable
         """
-        a = self.mu
-        b = self.b
-        y = (value - a) / b
+        y = (value - mu) / b
         return bound(
             at.switch(
-                at.le(value, a),
+                at.le(value, mu),
                 at.log(0.5) + y,
                 at.switch(
                     at.gt(y, 1),
@@ -1751,8 +1660,8 @@ class AsymmetricLaplace(Continuous):
         -------
         array
         """
-        b, kappa, mu = draw_values([self.b, self.kappa, self.mu], point=point, size=size)
-        return generate_samples(self._random, b, kappa, mu, dist_shape=self.shape, size=size)
+        # b, kappa, mu = draw_values([self.b, self.kappa, self.mu], point=point, size=size)
+        # return generate_samples(self._random, b, kappa, mu, dist_shape=self.shape, size=size)
 
     def logp(self, value):
         """
@@ -1762,7 +1671,7 @@ class AsymmetricLaplace(Continuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
@@ -1840,50 +1749,24 @@ class Lognormal(PositiveContinuous):
             x = pm.Lognormal('x', mu=2, tau=1/100)
     """
 
-    def __init__(self, mu=0, sigma=None, tau=None, sd=None, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    rv_op = lognormal
+
+    @classmethod
+    def dist(cls, mu=0, sigma=None, tau=None, sd=None, *args, **kwargs):
         if sd is not None:
             sigma = sd
 
         tau, sigma = get_tau_sigma(tau=tau, sigma=sigma)
 
-        self.mu = mu = at.as_tensor_variable(floatX(mu))
-        self.tau = tau = at.as_tensor_variable(tau)
-        self.sigma = self.sd = sigma = at.as_tensor_variable(sigma)
+        mu = at.as_tensor_variable(floatX(mu))
+        sigma = at.as_tensor_variable(floatX(sigma))
 
-        self.mean = at.exp(self.mu + 1.0 / (2 * self.tau))
-        self.median = at.exp(self.mu)
-        self.mode = at.exp(self.mu - 1.0 / self.tau)
-        self.variance = (at.exp(1.0 / self.tau) - 1) * at.exp(2 * self.mu + 1.0 / self.tau)
+        assert_negative_support(tau, "tau", "LogNormal")
+        assert_negative_support(sigma, "sigma", "LogNormal")
 
-        assert_negative_support(tau, "tau", "Lognormal")
-        assert_negative_support(sigma, "sigma", "Lognormal")
+        return super().dist([mu, sigma], *args, **kwargs)
 
-    def _random(self, mu, tau, size=None):
-        samples = np.random.normal(size=size)
-        return np.exp(mu + (tau ** -0.5) * samples)
-
-    def random(self, point=None, size=None):
-        """
-        Draw random values from Lognormal distribution.
-
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        mu, tau = draw_values([self.mu, self.tau], point=point, size=size)
-        return generate_samples(self._random, mu, tau, dist_shape=self.shape, size=size)
-
-    def logp(self, value):
+    def logp(value, mu, sigma):
         """
         Calculate log-probability of Lognormal distribution at specified value.
 
@@ -1891,14 +1774,13 @@ class Lognormal(PositiveContinuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
         TensorVariable
         """
-        mu = self.mu
-        tau = self.tau
+        tau, sigma = get_tau_sigma(tau=None, sigma=sigma)
         return bound(
             -0.5 * tau * (at.log(value) - mu) ** 2
             + 0.5 * at.log(tau / (2.0 * np.pi))
@@ -1906,10 +1788,7 @@ class Lognormal(PositiveContinuous):
             tau > 0,
         )
 
-    def _distr_parameters_for_repr(self):
-        return ["mu", "tau"]
-
-    def logcdf(self, value):
+    def logcdf(value, mu, sigma):
         """
         Compute the log of the cumulative distribution function for Lognormal distribution
         at the specified value.
@@ -1918,21 +1797,33 @@ class Lognormal(PositiveContinuous):
         ----------
         value: numeric or np.ndarray or aesara.tensor
             Value(s) for which log CDF is calculated. If the log CDF for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor.
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
         TensorVariable
         """
-        mu = self.mu
-        sigma = self.sigma
-        tau = self.tau
 
         return bound(
             normal_lcdf(mu, sigma, at.log(value)),
             0 < value,
-            0 < tau,
+            0 < sigma,
         )
+
+
+class StudentTRV(RandomVariable):
+    name = "studentt"
+    ndim_supp = 0
+    ndims_params = [0, 0, 0]
+    dtype = "floatX"
+    _print_name = ("StudentT", "\\operatorname{StudentT}")
+
+    @classmethod
+    def rng_fn(cls, rng, nu, mu, sigma, size=None):
+        return stats.t.rvs(nu, mu, sigma, size=size, random_state=rng)
+
+
+studentt = StudentTRV()
 
 
 class StudentT(Continuous):
@@ -1998,45 +1889,22 @@ class StudentT(Continuous):
         with pm.Model():
             x = pm.StudentT('x', nu=15, mu=0, lam=1/23)
     """
+    rv_op = studentt
 
-    def __init__(self, nu, mu=0, lam=None, sigma=None, sd=None, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    @classmethod
+    def dist(cls, nu, mu=0, lam=None, sigma=None, sd=None, *args, **kwargs):
         if sd is not None:
             sigma = sd
-        self.nu = nu = at.as_tensor_variable(floatX(nu))
+        nu = at.as_tensor_variable(floatX(nu))
         lam, sigma = get_tau_sigma(tau=lam, sigma=sigma)
-        self.lam = lam = at.as_tensor_variable(lam)
-        self.sigma = self.sd = sigma = at.as_tensor_variable(sigma)
-        self.mean = self.median = self.mode = self.mu = mu = at.as_tensor_variable(mu)
+        sigma = at.as_tensor_variable(sigma)
 
-        self.variance = at.switch((nu > 2) * 1, (1 / self.lam) * (nu / (nu - 2)), np.inf)
-
-        assert_negative_support(lam, "lam (sigma)", "StudentT")
+        assert_negative_support(sigma, "sigma (lam)", "StudentT")
         assert_negative_support(nu, "nu", "StudentT")
 
-    def random(self, point=None, size=None):
-        """
-        Draw random values from StudentT distribution.
+        return super().dist([nu, mu, sigma], **kwargs)
 
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        nu, mu, lam = draw_values([self.nu, self.mu, self.lam], point=point, size=size)
-        return generate_samples(
-            stats.t.rvs, nu, loc=mu, scale=lam ** -0.5, dist_shape=self.shape, size=size
-        )
-
-    def logp(self, value):
+    def logp(value, nu, mu, sigma):
         """
         Calculate log-probability of StudentT distribution at specified value.
 
@@ -2044,17 +1912,13 @@ class StudentT(Continuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
         TensorVariable
         """
-        nu = self.nu
-        mu = self.mu
-        lam = self.lam
-        sigma = self.sigma
-
+        lam, sigma = get_tau_sigma(sigma=sigma)
         return bound(
             gammaln((nu + 1.0) / 2.0)
             + 0.5 * at.log(lam / (nu * np.pi))
@@ -2065,10 +1929,7 @@ class StudentT(Continuous):
             sigma > 0,
         )
 
-    def _distr_parameters_for_repr(self):
-        return ["nu", "mu", "lam"]
-
-    def logcdf(self, value):
+    def logcdf(value, nu, mu, sigma):
         """
         Compute the log of the cumulative distribution function for Student's T distribution
         at the specified value.
@@ -2088,10 +1949,8 @@ class StudentT(Continuous):
                 f"StudentT.logcdf expects a scalar value but received a {np.ndim(value)}-dimensional object."
             )
 
-        nu = self.nu
-        mu = self.mu
-        sigma = self.sigma
-        lam = self.lam
+        lam, sigma = get_tau_sigma(sigma=sigma)
+
         t = (value - mu) / sigma
         sqrt_t2_nu = at.sqrt(t ** 2 + nu)
         x = (t + sqrt_t2_nu) / (2.0 * sqrt_t2_nu)
@@ -2104,7 +1963,7 @@ class StudentT(Continuous):
         )
 
 
-class Pareto(Continuous):
+class Pareto(BoundedContinuous):
     r"""
     Pareto log-likelihood.
 
@@ -2149,49 +2008,26 @@ class Pareto(Continuous):
     m: float
         Scale parameter (m > 0).
     """
+    rv_op = pareto
+    bound_args_indices = (1, None)  # lower-bounded by `m`
 
-    def __init__(self, alpha, m, transform="lowerbound", *args, **kwargs):
-        self.alpha = alpha = at.as_tensor_variable(floatX(alpha))
-        self.m = m = at.as_tensor_variable(floatX(m))
-
-        self.mean = at.switch(at.gt(alpha, 1), alpha * m / (alpha - 1.0), np.inf)
-        self.median = m * 2.0 ** (1.0 / alpha)
-        self.variance = at.switch(
-            at.gt(alpha, 2), (alpha * m ** 2) / ((alpha - 2.0) * (alpha - 1.0) ** 2), np.inf
-        )
+    @classmethod
+    def dist(
+        cls, alpha: float = None, m: float = None, no_assert: bool = False, **kwargs
+    ) -> RandomVariable:
+        alpha = at.as_tensor_variable(floatX(alpha))
+        m = at.as_tensor_variable(floatX(m))
 
         assert_negative_support(alpha, "alpha", "Pareto")
         assert_negative_support(m, "m", "Pareto")
 
-        if transform == "lowerbound":
-            transform = transforms.lowerbound(self.m)
-        super().__init__(transform=transform, *args, **kwargs)
+        return super().dist([alpha, m], **kwargs)
 
-    def _random(self, alpha, m, size=None):
-        u = np.random.uniform(size=size)
-        return m * (1.0 - u) ** (-1.0 / alpha)
-
-    def random(self, point=None, size=None):
-        """
-        Draw random values from Pareto distribution.
-
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        alpha, m = draw_values([self.alpha, self.m], point=point, size=size)
-        return generate_samples(self._random, alpha, m, dist_shape=self.shape, size=size)
-
-    def logp(self, value):
+    def logp(
+        value: Union[float, np.ndarray, TensorVariable],
+        alpha: Union[float, np.ndarray, TensorVariable],
+        m: Union[float, np.ndarray, TensorVariable],
+    ):
         """
         Calculate log-probability of Pareto distribution at specified value.
 
@@ -2199,14 +2035,12 @@ class Pareto(Continuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
         TensorVariable
         """
-        alpha = self.alpha
-        m = self.m
         return bound(
             at.log(alpha) + logpow(m, alpha) - logpow(value, alpha + 1),
             value >= m,
@@ -2217,7 +2051,11 @@ class Pareto(Continuous):
     def _distr_parameters_for_repr(self):
         return ["alpha", "m"]
 
-    def logcdf(self, value):
+    def logcdf(
+        value: Union[float, np.ndarray, TensorVariable],
+        alpha: Union[float, np.ndarray, TensorVariable],
+        m: Union[float, np.ndarray, TensorVariable],
+    ):
         """
         Compute the log of the cumulative distribution function for Pareto distribution
         at the specified value.
@@ -2226,14 +2064,12 @@ class Pareto(Continuous):
         ----------
         value: numeric or np.ndarray or aesara.tensor
             Value(s) for which log CDF is calculated. If the log CDF for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor.
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
         TensorVariable
         """
-        m = self.m
-        alpha = self.alpha
         arg = (m / value) ** alpha
         return bound(
             at.switch(
@@ -2292,39 +2128,20 @@ class Cauchy(Continuous):
     beta: float
         Scale parameter > 0
     """
+    rv_op = cauchy
 
-    def __init__(self, alpha, beta, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.median = self.mode = self.alpha = at.as_tensor_variable(floatX(alpha))
-        self.beta = at.as_tensor_variable(floatX(beta))
+    @classmethod
+    def dist(cls, alpha, beta, *args, **kwargs):
+        alpha = at.as_tensor_variable(floatX(alpha))
+        beta = at.as_tensor_variable(floatX(beta))
+
+        # median = alpha
+        # mode = alpha
 
         assert_negative_support(beta, "beta", "Cauchy")
+        return super().dist([alpha, beta], **kwargs)
 
-    def _random(self, alpha, beta, size=None):
-        u = np.random.uniform(size=size)
-        return alpha + beta * np.tan(np.pi * (u - 0.5))
-
-    def random(self, point=None, size=None):
-        """
-        Draw random values from Cauchy distribution.
-
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        alpha, beta = draw_values([self.alpha, self.beta], point=point, size=size)
-        return generate_samples(self._random, alpha, beta, dist_shape=self.shape, size=size)
-
-    def logp(self, value):
+    def logp(value, alpha, beta):
         """
         Calculate log-probability of Cauchy distribution at specified value.
 
@@ -2332,19 +2149,17 @@ class Cauchy(Continuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
         TensorVariable
         """
-        alpha = self.alpha
-        beta = self.beta
         return bound(
             -at.log(np.pi) - at.log(beta) - at.log1p(((value - alpha) / beta) ** 2), beta > 0
         )
 
-    def logcdf(self, value):
+    def logcdf(value, alpha, beta):
         """
         Compute the log of the cumulative distribution function for Cauchy distribution
         at the specified value.
@@ -2353,14 +2168,12 @@ class Cauchy(Continuous):
         ----------
         value: numeric or np.ndarray or aesara.tensor
             Value(s) for which log CDF is calculated. If the log CDF for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor.
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
         TensorVariable
         """
-        alpha = self.alpha
-        beta = self.beta
         return bound(
             at.log(0.5 + at.arctan((value - alpha) / beta) / np.pi),
             0 < beta,
@@ -2405,39 +2218,15 @@ class HalfCauchy(PositiveContinuous):
     beta: float
         Scale parameter (beta > 0).
     """
+    rv_op = halfcauchy
 
-    def __init__(self, beta, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.mode = at.as_tensor_variable(0)
-        self.median = self.beta = at.as_tensor_variable(floatX(beta))
-
+    @classmethod
+    def dist(cls, beta, *args, **kwargs):
+        beta = at.as_tensor_variable(floatX(beta))
         assert_negative_support(beta, "beta", "HalfCauchy")
+        return super().dist([0.0, beta], **kwargs)
 
-    def _random(self, beta, size=None):
-        u = np.random.uniform(size=size)
-        return beta * np.abs(np.tan(np.pi * (u - 0.5)))
-
-    def random(self, point=None, size=None):
-        """
-        Draw random values from HalfCauchy distribution.
-
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        beta = draw_values([self.beta], point=point, size=size)[0]
-        return generate_samples(self._random, beta, dist_shape=self.shape, size=size)
-
-    def logp(self, value):
+    def logp(value, loc, beta):
         """
         Calculate log-probability of HalfCauchy distribution at specified value.
 
@@ -2445,20 +2234,19 @@ class HalfCauchy(PositiveContinuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
         TensorVariable
         """
-        beta = self.beta
         return bound(
-            at.log(2) - at.log(np.pi) - at.log(beta) - at.log1p((value / beta) ** 2),
-            value >= 0,
+            at.log(2) - at.log(np.pi) - at.log(beta) - at.log1p(((value - loc) / beta) ** 2),
+            value >= loc,
             beta > 0,
         )
 
-    def logcdf(self, value):
+    def logcdf(value, loc, beta):
         """
         Compute the log of the cumulative distribution function for HalfCauchy distribution
         at the specified value.
@@ -2467,16 +2255,15 @@ class HalfCauchy(PositiveContinuous):
         ----------
         value: numeric or np.ndarray or aesara.tensor
             Value(s) for which log CDF is calculated. If the log CDF for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor.
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
         TensorVariable
         """
-        beta = self.beta
         return bound(
-            at.log(2 * at.arctan(value / beta) / np.pi),
-            0 <= value,
+            at.log(2 * at.arctan((value - loc) / beta) / np.pi),
+            loc <= value,
             0 < beta,
         )
 
@@ -2539,23 +2326,26 @@ class Gamma(PositiveContinuous):
     sigma: float
         Alternative scale parameter (sigma > 0).
     """
+    rv_op = gamma
 
-    def __init__(self, alpha=None, beta=None, mu=None, sigma=None, sd=None, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    @classmethod
+    def dist(cls, alpha=None, beta=None, mu=None, sigma=None, sd=None, no_assert=False, **kwargs):
         if sd is not None:
             sigma = sd
 
-        alpha, beta = self.get_alpha_beta(alpha, beta, mu, sigma)
-        self.alpha = alpha = at.as_tensor_variable(floatX(alpha))
-        self.beta = beta = at.as_tensor_variable(floatX(beta))
-        self.mean = alpha / beta
-        self.mode = at.maximum((alpha - 1) / beta, 0)
-        self.variance = alpha / beta ** 2
+        alpha, beta = cls.get_alpha_beta(alpha, beta, mu, sigma)
+        alpha = at.as_tensor_variable(floatX(alpha))
+        beta = at.as_tensor_variable(floatX(beta))
 
-        assert_negative_support(alpha, "alpha", "Gamma")
-        assert_negative_support(beta, "beta", "Gamma")
+        if not no_assert:
+            assert_negative_support(alpha, "alpha", "Gamma")
+            assert_negative_support(beta, "beta", "Gamma")
 
-    def get_alpha_beta(self, alpha=None, beta=None, mu=None, sigma=None):
+        # The Aesara `GammaRV` `Op` will invert the `beta` parameter itself
+        return super().dist([alpha, beta], **kwargs)
+
+    @classmethod
+    def get_alpha_beta(cls, alpha=None, beta=None, mu=None, sigma=None):
         if (alpha is not None) and (beta is not None):
             pass
         elif (mu is not None) and (sigma is not None):
@@ -2570,44 +2360,22 @@ class Gamma(PositiveContinuous):
 
         return alpha, beta
 
-    def random(self, point=None, size=None):
-        """
-        Draw random values from Gamma distribution.
-
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        alpha, beta = draw_values([self.alpha, self.beta], point=point, size=size)
-        return generate_samples(
-            stats.gamma.rvs, alpha, scale=1.0 / beta, dist_shape=self.shape, size=size
-        )
-
-    def logp(self, value):
+    def logp(value, alpha, inv_beta):
         """
         Calculate log-probability of Gamma distribution at specified value.
 
         Parameters
         ----------
         value: numeric
-            Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            Value(s) for which log-probability is calculated. If the log
+            probabilities for multiple values are desired the values must be
+            provided in a numpy array or `TensorVariable`.
 
         Returns
         -------
         TensorVariable
         """
-        alpha = self.alpha
-        beta = self.beta
+        beta = at.inv(inv_beta)
         return bound(
             -gammaln(alpha) + logpow(beta, alpha) - beta * value + logpow(value, alpha - 1),
             value >= 0,
@@ -2615,23 +2383,24 @@ class Gamma(PositiveContinuous):
             beta > 0,
         )
 
-    def logcdf(self, value):
+    def logcdf(value, alpha, inv_beta):
         """
         Compute the log of the cumulative distribution function for Gamma distribution
         at the specified value.
 
         Parameters
         ----------
-        value: numeric or np.ndarray or aesara.tensor
-            Value(s) for which log CDF is calculated. If the log CDF for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor.
+        value: numeric or np.ndarray or `TensorVariable`
+            Value(s) for which log CDF is calculated. If the log CDF for
+            multiple values are desired the values must be provided in a numpy
+            array or `TensorVariable`.
 
         Returns
         -------
         TensorVariable
         """
-        alpha = self.alpha
-        beta = self.beta
+        beta = at.inv(inv_beta)
+
         # Avoid C-assertion when the gammainc function is called with invalid values (#4340)
         safe_alpha = at.switch(at.lt(alpha, 0), 0, alpha)
         safe_beta = at.switch(at.lt(beta, 0), 0, beta)
@@ -2643,9 +2412,6 @@ class Gamma(PositiveContinuous):
             0 < alpha,
             0 < beta,
         )
-
-    def _distr_parameters_for_repr(self):
-        return ["alpha", "beta"]
 
 
 class InverseGamma(PositiveContinuous):
@@ -2696,35 +2462,36 @@ class InverseGamma(PositiveContinuous):
     sigma: float
         Alternative scale parameter (sigma > 0).
     """
+    rv_op = invgamma
 
-    def __init__(self, alpha=None, beta=None, mu=None, sigma=None, sd=None, *args, **kwargs):
-        super().__init__(*args, defaults=("mode",), **kwargs)
-
+    @classmethod
+    def dist(cls, alpha=None, beta=None, mu=None, sigma=None, sd=None, *args, **kwargs):
         if sd is not None:
             sigma = sd
 
-        alpha, beta = InverseGamma._get_alpha_beta(alpha, beta, mu, sigma)
-        self.alpha = alpha = at.as_tensor_variable(floatX(alpha))
-        self.beta = beta = at.as_tensor_variable(floatX(beta))
+        alpha, beta = cls._get_alpha_beta(alpha, beta, mu, sigma)
+        alpha = at.as_tensor_variable(floatX(alpha))
+        beta = at.as_tensor_variable(floatX(beta))
 
-        self.mean = self._calculate_mean()
-        self.mode = beta / (alpha + 1.0)
-        self.variance = at.switch(
-            at.gt(alpha, 2), (beta ** 2) / ((alpha - 2) * (alpha - 1.0) ** 2), np.inf
-        )
+        # m = beta / (alpha - 1.0)
+        # try:
+        #     mean = (alpha > 1) * m or np.inf
+        # except ValueError:  # alpha is an array
+        #     m[alpha <= 1] = np.inf
+        #     mean = m
+
+        # mode = beta / (alpha + 1.0)
+        # variance = at.switch(
+        #     at.gt(alpha, 2), (beta ** 2) / ((alpha - 2) * (alpha - 1.0) ** 2), np.inf
+        # )
+
         assert_negative_support(alpha, "alpha", "InverseGamma")
         assert_negative_support(beta, "beta", "InverseGamma")
 
-    def _calculate_mean(self):
-        m = self.beta / (self.alpha - 1.0)
-        try:
-            return (self.alpha > 1) * m or np.inf
-        except ValueError:  # alpha is an array
-            m[self.alpha <= 1] = np.inf
-            return m
+        return super().dist([alpha, beta], **kwargs)
 
-    @staticmethod
-    def _get_alpha_beta(alpha, beta, mu, sigma):
+    @classmethod
+    def _get_alpha_beta(cls, alpha, beta, mu, sigma):
         if alpha is not None:
             if beta is not None:
                 pass
@@ -2742,29 +2509,11 @@ class InverseGamma(PositiveContinuous):
 
         return alpha, beta
 
-    def random(self, point=None, size=None):
-        """
-        Draw random values from InverseGamma distribution.
+    @classmethod
+    def _distr_parameters_for_repr(self):
+        return ["alpha", "beta"]
 
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        alpha, beta = draw_values([self.alpha, self.beta], point=point, size=size)
-        return generate_samples(
-            stats.invgamma.rvs, a=alpha, scale=beta, dist_shape=self.shape, size=size
-        )
-
-    def logp(self, value):
+    def logp(value, alpha, beta):
         """
         Calculate log-probability of InverseGamma distribution at specified value.
 
@@ -2772,14 +2521,12 @@ class InverseGamma(PositiveContinuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
         TensorVariable
         """
-        alpha = self.alpha
-        beta = self.beta
         return bound(
             logpow(beta, alpha) - gammaln(alpha) - beta / value + logpow(value, -alpha - 1),
             value > 0,
@@ -2787,10 +2534,7 @@ class InverseGamma(PositiveContinuous):
             beta > 0,
         )
 
-    def _distr_parameters_for_repr(self):
-        return ["alpha", "beta"]
-
-    def logcdf(self, value):
+    def logcdf(value, alpha, beta):
         """
         Compute the log of the cumulative distribution function for Inverse Gamma distribution
         at the specified value.
@@ -2799,14 +2543,12 @@ class InverseGamma(PositiveContinuous):
         ----------
         value: numeric or np.ndarray or aesara.tensor
             Value(s) for which log CDF is calculated. If the log CDF for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor.
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
         TensorVariable
         """
-        alpha = self.alpha
-        beta = self.beta
         # Avoid C-assertion when the gammaincc function is called with invalid values (#4340)
         safe_alpha = at.switch(at.lt(alpha, 0), 0, alpha)
         safe_beta = at.switch(at.lt(beta, 0), 0, beta)
@@ -2864,6 +2606,18 @@ class ChiSquared(Gamma):
         super().__init__(alpha=nu / 2.0, beta=0.5, *args, **kwargs)
 
 
+# TODO: Remove this once logpt for multiplication is working!
+class WeibullBetaRV(WeibullRV):
+    ndims_params = [0, 0]
+
+    @classmethod
+    def rng_fn(cls, rng, alpha, beta, size):
+        return beta * rng.weibull(alpha, size=size)
+
+
+weibull_beta = WeibullBetaRV()
+
+
 class Weibull(PositiveContinuous):
     r"""
     Weibull log-likelihood.
@@ -2909,45 +2663,19 @@ class Weibull(PositiveContinuous):
         Scale parameter (beta > 0).
     """
 
-    def __init__(self, alpha, beta, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.alpha = alpha = at.as_tensor_variable(floatX(alpha))
-        self.beta = beta = at.as_tensor_variable(floatX(beta))
-        self.mean = beta * at.exp(gammaln(1 + 1.0 / alpha))
-        self.median = beta * at.exp(gammaln(at.log(2))) ** (1.0 / alpha)
-        self.variance = beta ** 2 * at.exp(gammaln(1 + 2.0 / alpha)) - self.mean ** 2
-        self.mode = at.switch(
-            alpha >= 1, beta * ((alpha - 1) / alpha) ** (1 / alpha), 0
-        )  # Reference: https://en.wikipedia.org/wiki/Weibull_distribution
+    rv_op = weibull_beta
+
+    @classmethod
+    def dist(cls, alpha, beta, *args, **kwargs):
+        alpha = at.as_tensor_variable(floatX(alpha))
+        beta = at.as_tensor_variable(floatX(beta))
 
         assert_negative_support(alpha, "alpha", "Weibull")
         assert_negative_support(beta, "beta", "Weibull")
 
-    def random(self, point=None, size=None):
-        """
-        Draw random values from Weibull distribution.
+        return super().dist([alpha, beta], *args, **kwargs)
 
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        alpha, beta = draw_values([self.alpha, self.beta], point=point, size=size)
-
-        def _random(a, b, size=None):
-            return b * (-np.log(np.random.uniform(size=size))) ** (1 / a)
-
-        return generate_samples(_random, alpha, beta, dist_shape=self.shape, size=size)
-
-    def logp(self, value):
+    def logp(value, alpha, beta):
         """
         Calculate log-probability of Weibull distribution at specified value.
 
@@ -2955,14 +2683,12 @@ class Weibull(PositiveContinuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
         TensorVariable
         """
-        alpha = self.alpha
-        beta = self.beta
         return bound(
             at.log(alpha)
             - at.log(beta)
@@ -2973,7 +2699,7 @@ class Weibull(PositiveContinuous):
             beta > 0,
         )
 
-    def logcdf(self, value):
+    def logcdf(value, alpha, beta):
         r"""
         Compute the log of the cumulative distribution function for Weibull distribution
         at the specified value.
@@ -2982,14 +2708,12 @@ class Weibull(PositiveContinuous):
         ----------
         value: numeric or np.ndarray or aesara.tensor
             Value(s) for which log CDF is calculated. If the log CDF for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor.
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
         TensorVariable
         """
-        alpha = self.alpha
-        beta = self.beta
         a = (value / beta) ** alpha
         return bound(
             log1mexp(a),
@@ -3090,10 +2814,10 @@ class HalfStudentT(PositiveContinuous):
         -------
         array
         """
-        nu, sigma = draw_values([self.nu, self.sigma], point=point, size=size)
-        return np.abs(
-            generate_samples(stats.t.rvs, nu, loc=0, scale=sigma, dist_shape=self.shape, size=size)
-        )
+        # nu, sigma = draw_values([self.nu, self.sigma], point=point, size=size)
+        # return np.abs(
+        #     generate_samples(stats.t.rvs, nu, loc=0, scale=sigma, dist_shape=self.shape, size=size)
+        # )
 
     def logp(self, value):
         """
@@ -3103,7 +2827,7 @@ class HalfStudentT(PositiveContinuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
@@ -3227,14 +2951,14 @@ class ExGaussian(Continuous):
         -------
         array
         """
-        mu, sigma, nu = draw_values([self.mu, self.sigma, self.nu], point=point, size=size)
-
-        def _random(mu, sigma, nu, size=None):
-            return np.random.normal(mu, sigma, size=size) + np.random.exponential(
-                scale=nu, size=size
-            )
-
-        return generate_samples(_random, mu, sigma, nu, dist_shape=self.shape, size=size)
+        # mu, sigma, nu = draw_values([self.mu, self.sigma, self.nu], point=point, size=size)
+        #
+        # def _random(mu, sigma, nu, size=None):
+        #     return np.random.normal(mu, sigma, size=size) + np.random.exponential(
+        #         scale=nu, size=size
+        #     )
+        #
+        # return generate_samples(_random, mu, sigma, nu, dist_shape=self.shape, size=size)
 
     def logp(self, value):
         """
@@ -3244,7 +2968,7 @@ class ExGaussian(Continuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
@@ -3285,7 +3009,7 @@ class ExGaussian(Continuous):
         ----------
         value: numeric or np.ndarray or aesara.tensor
             Value(s) for which log CDF is calculated. If the log CDF for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor.
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
@@ -3317,7 +3041,7 @@ class ExGaussian(Continuous):
         return ["mu", "sigma", "nu"]
 
 
-class VonMises(Continuous):
+class VonMises(CircularContinuous):
     r"""
     Univariate VonMises log-likelihood.
 
@@ -3362,38 +3086,16 @@ class VonMises(Continuous):
         Concentration (\frac{1}{kappa} is analogous to \sigma^2).
     """
 
-    def __init__(self, mu=0.0, kappa=None, transform="circular", *args, **kwargs):
-        if transform == "circular":
-            transform = transforms.Circular()
-        super().__init__(transform=transform, *args, **kwargs)
-        self.mean = self.median = self.mode = self.mu = mu = at.as_tensor_variable(floatX(mu))
-        self.kappa = kappa = at.as_tensor_variable(floatX(kappa))
+    rv_op = vonmises
 
+    @classmethod
+    def dist(cls, mu=0.0, kappa=None, *args, **kwargs):
+        mu = at.as_tensor_variable(floatX(mu))
+        kappa = at.as_tensor_variable(floatX(kappa))
         assert_negative_support(kappa, "kappa", "VonMises")
+        return super().dist([mu, kappa], *args, **kwargs)
 
-    def random(self, point=None, size=None):
-        """
-        Draw random values from VonMises distribution.
-
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        mu, kappa = draw_values([self.mu, self.kappa], point=point, size=size)
-        return generate_samples(
-            stats.vonmises.rvs, loc=mu, kappa=kappa, dist_shape=self.shape, size=size
-        )
-
-    def logp(self, value):
+    def logp(value, mu, kappa):
         """
         Calculate log-probability of VonMises distribution at specified value.
 
@@ -3401,14 +3103,12 @@ class VonMises(Continuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
         TensorVariable
         """
-        mu = self.mu
-        kappa = self.kappa
         return bound(
             kappa * at.cos(mu - value) - (at.log(2 * np.pi) + log_i0(kappa)),
             kappa > 0,
@@ -3416,8 +3116,20 @@ class VonMises(Continuous):
             value <= np.pi,
         )
 
-    def _distr_parameters_for_repr(self):
-        return ["mu", "kappa"]
+
+class SkewNormalRV(RandomVariable):
+    name = "skewnormal"
+    ndim_supp = 0
+    ndims_params = [0, 0, 0]
+    dtype = "floatX"
+    _print_name = ("SkewNormal", "\\operatorname{SkewNormal}")
+
+    @classmethod
+    def rng_fn(cls, rng, mu, sigma, alpha, size=None):
+        return stats.skewnorm.rvs(a=alpha, loc=mu, scale=sigma, size=size, random_state=rng)
+
+
+skewnormal = SkewNormalRV()
 
 
 class SkewNormal(Continuous):
@@ -3478,51 +3190,25 @@ class SkewNormal(Continuous):
     approaching plus/minus infinite we get a half-normal distribution.
 
     """
+    rv_op = skewnormal
 
-    def __init__(self, mu=0.0, sigma=None, tau=None, alpha=1, sd=None, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
+    @classmethod
+    def dist(cls, alpha=1, mu=0.0, sigma=None, tau=None, sd=None, *args, **kwargs):
         if sd is not None:
             sigma = sd
 
         tau, sigma = get_tau_sigma(tau=tau, sigma=sigma)
-        self.mu = mu = at.as_tensor_variable(floatX(mu))
-        self.tau = at.as_tensor_variable(tau)
-        self.sigma = self.sd = at.as_tensor_variable(sigma)
-
-        self.alpha = alpha = at.as_tensor_variable(floatX(alpha))
-
-        self.mean = mu + self.sigma * (2 / np.pi) ** 0.5 * alpha / (1 + alpha ** 2) ** 0.5
-        self.variance = self.sigma ** 2 * (1 - (2 * alpha ** 2) / ((1 + alpha ** 2) * np.pi))
+        alpha = at.as_tensor_variable(floatX(alpha))
+        mu = at.as_tensor_variable(floatX(mu))
+        tau = at.as_tensor_variable(tau)
+        sigma = at.as_tensor_variable(sigma)
 
         assert_negative_support(tau, "tau", "SkewNormal")
         assert_negative_support(sigma, "sigma", "SkewNormal")
 
-    def random(self, point=None, size=None):
-        """
-        Draw random values from SkewNormal distribution.
+        return super().dist([mu, sigma, alpha], *args, **kwargs)
 
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        mu, tau, _, alpha = draw_values(
-            [self.mu, self.tau, self.sigma, self.alpha], point=point, size=size
-        )
-        return generate_samples(
-            stats.skewnorm.rvs, a=alpha, loc=mu, scale=tau ** -0.5, dist_shape=self.shape, size=size
-        )
-
-    def logp(self, value):
+    def logp(value, mu, sigma, alpha):
         """
         Calculate log-probability of SkewNormal distribution at specified value.
 
@@ -3530,25 +3216,19 @@ class SkewNormal(Continuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
         TensorVariable
         """
-        tau = self.tau
-        sigma = self.sigma
-        mu = self.mu
-        alpha = self.alpha
+        tau, sigma = get_tau_sigma(sigma=sigma)
         return bound(
             at.log(1 + at.erf(((value - mu) * at.sqrt(tau) * alpha) / at.sqrt(2)))
             + (-tau * (value - mu) ** 2 + at.log(tau / np.pi / 2.0)) / 2.0,
             tau > 0,
             sigma > 0,
         )
-
-    def _distr_parameters_for_repr(self):
-        return ["mu", "sigma", "alpha"]
 
 
 class Triangular(BoundedContinuous):
@@ -3606,45 +3286,18 @@ class Triangular(BoundedContinuous):
         Upper limit.
     """
 
-    def __init__(self, lower=0, upper=1, c=0.5, *args, **kwargs):
-        self.median = self.mean = self.c = c = at.as_tensor_variable(floatX(c))
-        self.lower = lower = at.as_tensor_variable(floatX(lower))
-        self.upper = upper = at.as_tensor_variable(floatX(upper))
+    rv_op = triangular
+    bound_args_indices = (0, 2)  # lower, upper
 
-        super().__init__(lower=lower, upper=upper, *args, **kwargs)
+    @classmethod
+    def dist(cls, lower=0, upper=1, c=0.5, *args, **kwargs):
+        lower = at.as_tensor_variable(floatX(lower))
+        upper = at.as_tensor_variable(floatX(upper))
+        c = at.as_tensor_variable(floatX(c))
 
-    def random(self, point=None, size=None):
-        """
-        Draw random values from Triangular distribution.
+        return super().dist([lower, c, upper], *args, **kwargs)
 
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        c, lower, upper = draw_values([self.c, self.lower, self.upper], point=point, size=size)
-        return generate_samples(
-            self._random, c=c, lower=lower, upper=upper, size=size, dist_shape=self.shape
-        )
-
-    def _random(self, c, lower, upper, size):
-        """Wrapper around stats.triang.rvs that converts Triangular's
-        parametrization to scipy.triang. All parameter arrays should have
-        been broadcasted properly by generate_samples at this point and size is
-        the scipy.rvs representation.
-        """
-        scale = upper - lower
-        return stats.triang.rvs(c=(c - lower) / scale, loc=lower, scale=scale, size=size)
-
-    def logp(self, value):
+    def logp(value, lower, c, upper):
         """
         Calculate log-probability of Triangular distribution at specified value.
 
@@ -3652,15 +3305,12 @@ class Triangular(BoundedContinuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
         TensorVariable
         """
-        c = self.c
-        lower = self.lower
-        upper = self.upper
         return bound(
             at.switch(
                 at.lt(value, c),
@@ -3669,9 +3319,11 @@ class Triangular(BoundedContinuous):
             ),
             lower <= value,
             value <= upper,
+            lower <= c,
+            c <= upper,
         )
 
-    def logcdf(self, value):
+    def logcdf(value, lower, c, upper):
         """
         Compute the log of the cumulative distribution function for Triangular distribution
         at the specified value.
@@ -3680,15 +3332,12 @@ class Triangular(BoundedContinuous):
         ----------
         value: numeric or np.ndarray or aesara.tensor
             Value(s) for which log CDF is calculated. If the log CDF for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor.
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
         TensorVariable
         """
-        c = self.c
-        lower = self.lower
-        upper = self.upper
         return bound(
             at.switch(
                 at.le(value, lower),
@@ -3703,7 +3352,8 @@ class Triangular(BoundedContinuous):
                     ),
                 ),
             ),
-            lower <= upper,
+            lower <= c,
+            c <= upper,
         )
 
 
@@ -3755,43 +3405,29 @@ class Gumbel(Continuous):
     beta: float
         Scale parameter (beta > 0).
     """
+    rv_op = gumbel
 
-    def __init__(self, mu=0, beta=1.0, **kwargs):
-        self.mu = at.as_tensor_variable(floatX(mu))
-        self.beta = at.as_tensor_variable(floatX(beta))
+    @classmethod
+    def dist(
+        cls, mu: float = None, beta: float = None, no_assert: bool = False, **kwargs
+    ) -> RandomVariable:
 
-        assert_negative_support(beta, "beta", "Gumbel")
+        mu = at.as_tensor_variable(floatX(mu))
+        beta = at.as_tensor_variable(floatX(beta))
 
-        self.mean = self.mu + self.beta * np.euler_gamma
-        self.median = self.mu - self.beta * at.log(at.log(2))
-        self.mode = self.mu
-        self.variance = (np.pi ** 2 / 6.0) * self.beta ** 2
+        if not no_assert:
+            assert_negative_support(beta, "beta", "Gumbel")
 
-        super().__init__(**kwargs)
+        return super().dist([mu, beta], **kwargs)
 
-    def random(self, point=None, size=None):
-        """
-        Draw random values from Gumbel distribution.
+    def _distr_parameters_for_repr(self):
+        return ["mu", "beta"]
 
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        mu, sigma = draw_values([self.mu, self.beta], point=point, size=size)
-        return generate_samples(
-            stats.gumbel_r.rvs, loc=mu, scale=sigma, dist_shape=self.shape, size=size
-        )
-
-    def logp(self, value):
+    def logp(
+        value: Union[float, np.ndarray, TensorVariable],
+        mu: Union[float, np.ndarray, TensorVariable],
+        beta: Union[float, np.ndarray, TensorVariable],
+    ) -> TensorVariable:
         """
         Calculate log-probability of Gumbel distribution at specified value.
 
@@ -3799,21 +3435,23 @@ class Gumbel(Continuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
         TensorVariable
         """
-        mu = self.mu
-        beta = self.beta
         scaled = (value - mu) / beta
         return bound(
-            -scaled - at.exp(-scaled) - at.log(self.beta),
+            -scaled - at.exp(-scaled) - at.log(beta),
             0 < beta,
         )
 
-    def logcdf(self, value):
+    def logcdf(
+        value: Union[float, np.ndarray, TensorVariable],
+        mu: Union[float, np.ndarray, TensorVariable],
+        beta: Union[float, np.ndarray, TensorVariable],
+    ) -> TensorVariable:
         """
         Compute the log of the cumulative distribution function for Gumbel distribution
         at the specified value.
@@ -3822,19 +3460,31 @@ class Gumbel(Continuous):
         ----------
         value: numeric or np.ndarray or aesara.tensor
             Value(s) for which log CDF is calculated. If the log CDF for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor.
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
         TensorVariable
         """
-        beta = self.beta
-        mu = self.mu
-
         return bound(
             -at.exp(-(value - mu) / beta),
             0 < beta,
         )
+
+
+class RiceRV(RandomVariable):
+    name = "rice"
+    ndim_supp = 0
+    ndims_params = [0, 0]
+    dtype = "floatX"
+    _print_name = ("Rice", "\\operatorname{Rice}")
+
+    @classmethod
+    def rng_fn(cls, rng, b, sigma, size=None):
+        return stats.rice.rvs(b=b, scale=sigma, size=size, random_state=rng)
+
+
+rice = RiceRV()
 
 
 class Rice(PositiveContinuous):
@@ -3896,42 +3546,21 @@ class Rice(PositiveContinuous):
        b = \dfrac{\nu}{\sigma}
 
     """
+    rv_op = rice
 
-    def __init__(self, nu=None, sigma=None, b=None, sd=None, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    @classmethod
+    def dist(cls, nu=None, sigma=None, b=None, sd=None, *args, **kwargs):
         if sd is not None:
             sigma = sd
 
-        nu, b, sigma = self.get_nu_b(nu, b, sigma)
-        self.nu = nu = at.as_tensor_variable(floatX(nu))
-        self.sigma = self.sd = sigma = at.as_tensor_variable(floatX(sigma))
-        self.b = b = at.as_tensor_variable(floatX(b))
+        nu, b, sigma = cls.get_nu_b(nu, b, sigma)
+        b = at.as_tensor_variable(floatX(b))
+        sigma = at.as_tensor_variable(floatX(sigma))
 
-        nu_sigma_ratio = -(nu ** 2) / (2 * sigma ** 2)
-        self.mean = (
-            sigma
-            * np.sqrt(np.pi / 2)
-            * at.exp(nu_sigma_ratio / 2)
-            * (
-                (1 - nu_sigma_ratio) * at.i0(-nu_sigma_ratio / 2)
-                - nu_sigma_ratio * at.i1(-nu_sigma_ratio / 2)
-            )
-        )
-        self.variance = (
-            2 * sigma ** 2
-            + nu ** 2
-            - (np.pi * sigma ** 2 / 2)
-            * (
-                at.exp(nu_sigma_ratio / 2)
-                * (
-                    (1 - nu_sigma_ratio) * at.i0(-nu_sigma_ratio / 2)
-                    - nu_sigma_ratio * at.i1(-nu_sigma_ratio / 2)
-                )
-            )
-            ** 2
-        )
+        return super().dist([b, sigma], *args, **kwargs)
 
-    def get_nu_b(self, nu, b, sigma):
+    @classmethod
+    def get_nu_b(cls, nu, b, sigma):
         if sigma is None:
             sigma = 1.0
         if nu is None and b is not None:
@@ -3942,35 +3571,7 @@ class Rice(PositiveContinuous):
             return nu, b, sigma
         raise ValueError("Rice distribution must specify either nu" " or b.")
 
-    def random(self, point=None, size=None):
-        """
-        Draw random values from Rice distribution.
-
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        nu, sigma = draw_values([self.nu, self.sigma], point=point, size=size)
-        return generate_samples(self._random, nu=nu, sigma=sigma, dist_shape=self.shape, size=size)
-
-    def _random(self, nu, sigma, size):
-        """Wrapper around stats.rice.rvs that converts Rice's
-        parametrization to scipy.rice. All parameter arrays should have
-        been broadcasted properly by generate_samples at this point and size is
-        the scipy.rvs representation.
-        """
-        return stats.rice.rvs(b=nu / sigma, scale=sigma, size=size)
-
-    def logp(self, value):
+    def logp(value, b, sigma):
         """
         Calculate log-probability of Rice distribution at specified value.
 
@@ -3978,25 +3579,18 @@ class Rice(PositiveContinuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
         TensorVariable
         """
-        nu = self.nu
-        sigma = self.sigma
-        b = self.b
         x = value / sigma
         return bound(
             at.log(x * at.exp((-(x - b) * (x - b)) / 2) * i0e(x * b) / sigma),
             sigma >= 0,
-            nu >= 0,
             value > 0,
         )
-
-    def _distr_parameters_for_repr(self):
-        return ["nu", "sigma"]
 
 
 class Logistic(Continuous):
@@ -4043,39 +3637,15 @@ class Logistic(Continuous):
         Scale (s > 0).
     """
 
-    def __init__(self, mu=0.0, s=1.0, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    rv_op = logistic
 
-        self.mu = at.as_tensor_variable(floatX(mu))
-        self.s = at.as_tensor_variable(floatX(s))
+    @classmethod
+    def dist(cls, mu=0.0, s=1.0, *args, **kwargs):
+        mu = at.as_tensor_variable(floatX(mu))
+        s = at.as_tensor_variable(floatX(s))
+        return super().dist([mu, s], *args, **kwargs)
 
-        self.mean = self.mode = mu
-        self.variance = s ** 2 * np.pi ** 2 / 3.0
-
-    def random(self, point=None, size=None):
-        """
-        Draw random values from Logistic distribution.
-
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        mu, s = draw_values([self.mu, self.s], point=point, size=size)
-
-        return generate_samples(
-            stats.logistic.rvs, loc=mu, scale=s, dist_shape=self.shape, size=size
-        )
-
-    def logp(self, value):
+    def logp(value, mu, s):
         """
         Calculate log-probability of Logistic distribution at specified value.
 
@@ -4083,21 +3653,19 @@ class Logistic(Continuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
         TensorVariable
         """
-        mu = self.mu
-        s = self.s
 
         return bound(
             -(value - mu) / s - at.log(s) - 2 * at.log1p(at.exp(-(value - mu) / s)),
             s > 0,
         )
 
-    def logcdf(self, value):
+    def logcdf(value, mu, s):
         r"""
         Compute the log of the cumulative distribution function for Logistic distribution
         at the specified value.
@@ -4106,18 +3674,32 @@ class Logistic(Continuous):
         ----------
         value: numeric or np.ndarray or aesara.tensor
             Value(s) for which log CDF is calculated. If the log CDF for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor.
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
         TensorVariable
         """
-        mu = self.mu
-        s = self.s
+
         return bound(
             -log1pexp(-(value - mu) / s),
             0 < s,
         )
+
+
+class LogitNormalRV(RandomVariable):
+    name = "logit_normal"
+    ndim_supp = 0
+    ndims_params = [0, 0]
+    dtype = "floatX"
+    _print_name = ("logitNormal", "\\operatorname{logitNormal}")
+
+    @classmethod
+    def rng_fn(cls, rng, mu, sigma, size=None):
+        return expit(stats.norm.rvs(loc=mu, scale=sigma, size=size, random_state=rng))
+
+
+logit_normal = LogitNormalRV()
 
 
 class LogitNormal(UnitContinuous):
@@ -4164,44 +3746,22 @@ class LogitNormal(UnitContinuous):
     tau: float
         Scale parameter (tau > 0).
     """
+    rv_op = logit_normal
 
-    def __init__(self, mu=0, sigma=None, tau=None, sd=None, **kwargs):
+    @classmethod
+    def dist(cls, mu=0, sigma=None, tau=None, sd=None, **kwargs):
         if sd is not None:
             sigma = sd
-        self.mu = mu = at.as_tensor_variable(floatX(mu))
+        mu = at.as_tensor_variable(floatX(mu))
         tau, sigma = get_tau_sigma(tau=tau, sigma=sigma)
-        self.sigma = self.sd = at.as_tensor_variable(sigma)
-        self.tau = tau = at.as_tensor_variable(tau)
-
-        self.median = invlogit(mu)
+        sigma = sd = at.as_tensor_variable(sigma)
+        tau = at.as_tensor_variable(tau)
         assert_negative_support(sigma, "sigma", "LogitNormal")
         assert_negative_support(tau, "tau", "LogitNormal")
 
-        super().__init__(**kwargs)
+        return super().dist([mu, sigma], **kwargs)
 
-    def random(self, point=None, size=None):
-        """
-        Draw random values from LogitNormal distribution.
-
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        mu, _, sigma = draw_values([self.mu, self.tau, self.sigma], point=point, size=size)
-        return expit(
-            generate_samples(stats.norm.rvs, loc=mu, scale=sigma, dist_shape=self.shape, size=size)
-        )
-
-    def logp(self, value):
+    def logp(value, mu, sigma):
         """
         Calculate log-probability of LogitNormal distribution at specified value.
 
@@ -4209,14 +3769,13 @@ class LogitNormal(UnitContinuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
         TensorVariable
         """
-        mu = self.mu
-        tau = self.tau
+        tau, sigma = get_tau_sigma(sigma=sigma)
         return bound(
             -0.5 * tau * (logit(value) - mu) ** 2
             + 0.5 * at.log(tau / (2.0 * np.pi))
@@ -4225,9 +3784,6 @@ class LogitNormal(UnitContinuous):
             value < 1,
             tau > 0,
         )
-
-    def _distr_parameters_for_repr(self):
-        return ["mu", "sigma"]
 
 
 class Interpolated(BoundedContinuous):
@@ -4330,7 +3886,7 @@ class Interpolated(BoundedContinuous):
         -------
         array
         """
-        return generate_samples(self._random, dist_shape=self.shape, size=size)
+        # return generate_samples(self._random, dist_shape=self.shape, size=size)
 
     def logp(self, value):
         """
@@ -4340,7 +3896,7 @@ class Interpolated(BoundedContinuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
@@ -4350,6 +3906,21 @@ class Interpolated(BoundedContinuous):
 
     def _distr_parameters_for_repr(self):
         return []
+
+
+class MoyalRV(RandomVariable):
+    name = "moyal"
+    ndim_supp = 0
+    ndims_params = [0, 0]
+    dtype = "floatX"
+    _print_name = ("Moyal", "\\operatorname{Moyal}")
+
+    @classmethod
+    def rng_fn(cls, rng, mu, sigma, size=None):
+        return stats.moyal.rvs(mu, sigma, size=size, random_state=rng)
+
+
+moyal = MoyalRV()
 
 
 class Moyal(Continuous):
@@ -4399,43 +3970,18 @@ class Moyal(Continuous):
     sigma: float
         Scale parameter (sigma > 0).
     """
+    rv_op = moyal
 
-    def __init__(self, mu=0, sigma=1.0, *args, **kwargs):
-        self.mu = at.as_tensor_variable(floatX(mu))
-        self.sigma = at.as_tensor_variable(floatX(sigma))
+    @classmethod
+    def dist(cls, mu=0, sigma=1.0, *args, **kwargs):
+        mu = at.as_tensor_variable(floatX(mu))
+        sigma = at.as_tensor_variable(floatX(sigma))
 
         assert_negative_support(sigma, "sigma", "Moyal")
 
-        self.mean = self.mu + self.sigma * (np.euler_gamma + at.log(2))
-        self.median = self.mu - self.sigma * at.log(2 * at.erfcinv(1 / 2) ** 2)
-        self.mode = self.mu
-        self.variance = (np.pi ** 2 / 2.0) * self.sigma ** 2
+        return super().dist([mu, sigma], *args, **kwargs)
 
-        super().__init__(*args, **kwargs)
-
-    def random(self, point=None, size=None):
-        """
-        Draw random values from Moyal distribution.
-
-        Parameters
-        ----------
-        point: dict, optional
-            Dict of variable values on which random values are to be
-            conditioned (uses default point if not specified).
-        size: int, optional
-            Desired size of random sample (returns one sample if not
-            specified).
-
-        Returns
-        -------
-        array
-        """
-        mu, sigma = draw_values([self.mu, self.sigma], point=point, size=size)
-        return generate_samples(
-            stats.moyal.rvs, loc=mu, scale=sigma, dist_shape=self.shape, size=size
-        )
-
-    def logp(self, value):
+    def logp(value, mu, sigma):
         """
         Calculate log-probability of Moyal distribution at specified value.
 
@@ -4443,21 +3989,19 @@ class Moyal(Continuous):
         ----------
         value: numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor
 
         Returns
         -------
         TensorVariable
         """
-        mu = self.mu
-        sigma = self.sigma
         scaled = (value - mu) / sigma
         return bound(
             (-(1 / 2) * (scaled + at.exp(-scaled)) - at.log(sigma) - (1 / 2) * at.log(2 * np.pi)),
             0 < sigma,
         )
 
-    def logcdf(self, value):
+    def logcdf(value, mu, sigma):
         """
         Compute the log of the cumulative distribution function for Moyal distribution
         at the specified value.
@@ -4466,15 +4010,12 @@ class Moyal(Continuous):
         ----------
         value: numeric or np.ndarray or aesara.tensor
             Value(s) for which log CDF is calculated. If the log CDF for multiple
-            values are desired the values must be provided in a numpy array or aesara tensor.
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
         TensorVariable
         """
-        mu = self.mu
-        sigma = self.sigma
-
         scaled = (value - mu) / sigma
         return bound(
             at.log(at.erfc(at.exp(-scaled / 2) * (2 ** -0.5))),
