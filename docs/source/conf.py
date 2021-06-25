@@ -1,3 +1,7 @@
+""" Sphinx configuration file.
+
+   isort:skip_file
+"""
 #!/usr/bin/env python3
 #
 # pymc3 documentation build configuration file, created by
@@ -15,13 +19,13 @@
 import os
 import sys
 
-import pymc3
 
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 sys.path.insert(0, os.path.abspath(os.path.join("..", "..")))
 sys.path.insert(0, os.path.abspath("sphinxext"))
+import pymc3  # isort:skip
 
 # -- General configuration ------------------------------------------------
 
@@ -35,16 +39,17 @@ extensions = [
     "matplotlib.sphinxext.plot_directive",
     "sphinx.ext.autodoc",
     "sphinx.ext.autosummary",
+    "sphinx.ext.viewcode",
     "sphinx.ext.mathjax",
     "sphinx.ext.intersphinx",
-    "nbsphinx",
     "numpydoc",
     "IPython.sphinxext.ipython_console_highlighting",
     "IPython.sphinxext.ipython_directive",
     "sphinx.ext.autosectionlabel",
     "sphinx.ext.napoleon",
     "gallery_generator",
-    "recommonmark",
+    "myst_nb",
+    "sphinx_panels",
 ]
 
 # Don't auto-generate summary for class members.
@@ -72,8 +77,8 @@ master_doc = "index"
 
 # General information about the project.
 project = "PyMC3"
-copyright = "2018, The PyMC Development Team"
-author = "PyMC developers"
+copyright = "2021, The PyMC Development Team"
+author = "PyMC contributors"
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -101,7 +106,13 @@ language = None
 # directories to ignore when looking for source files.
 exclude_patterns = ["_build", "**.ipynb_checkpoints"]
 
-nbsphinx_execute = "never"
+# myst and panels config
+jupyter_execute_notebooks = "off"
+myst_heading_anchors = 3
+myst_enable_extensions = [
+    "colon_fence",
+]
+panels_add_bootstrap_css = False
 
 # The reST default role (used for this markup: `text`) to use for all
 # documents.
@@ -140,8 +151,7 @@ intersphinx_mapping = {
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
-html_theme_path = ["."]
-html_theme = "semantic_sphinx"
+html_theme = "pydata_sphinx_theme"
 
 
 # Theme options are theme-specific and customize the look and feel of a theme
@@ -149,17 +159,32 @@ html_theme = "semantic_sphinx"
 # documentation.
 
 html_theme_options = {
-    "navbar_links": [
-        ("Tutorials", "nb_tutorials/index"),
-        ("Examples", "nb_examples/index"),
-        ("Books + Videos", "learn"),
-        ("API", "api"),
-        ("Developer Guide", "developer_guide"),
-        ("About PyMC3", "about"),
+    "icon_links": [
+        {
+            "name": "GitHub",
+            "url": "https://github.com/pymc-devs/pymc3",
+            "icon": "fab fa-github-square",
+        },
+        {
+            "name": "Twitter",
+            "url": "https://twitter.com/pymc_devs",
+            "icon": "fab fa-twitter-square",
+        },
     ],
-    #     "fixed_sidebar": "false",
-    #     "description": "Probabilistic Programming in Python: Bayesian Modeling and Probabilistic Machine Learning with Aesara"
+    "show_prev_next": False,
+    "navbar_start": ["navbar-logo", "navbar-version"],
+    "navbar_end": ["search-field.html", "navbar-icon-links.html"],
+    "search_bar_text": "Search...",
+    "use_edit_page_button": False,  # TODO: see how to skip of fix for generated pages
+    "google_analytics_id": "UA-176578023-1",
 }
+html_context = {
+    "github_user": "pymc-devs",
+    "github_repo": "pymc3",
+    "github_version": "main",
+    "doc_path": "docs/source/",
+}
+html_sidebars = {"learn": [], "**": ["sidebar-nav-bs.html", "sidebar-ethical-ads.html"]}
 
 # Add any paths that contain custom themes here, relative to this directory.
 # html_theme_path = []
@@ -199,7 +224,7 @@ html_static_path = ["_static", "nb_tutorials/_images", "nb_examples/_images"]
 # html_use_smartypants = True
 
 # Custom sidebar templates, maps document names to template names.
-html_sidebars = {"**": ["about.html", "navigation.html", "searchbox.html"]}
+# html_sidebars = {"**": ["about.html", "navigation.html", "searchbox.html"]}
 
 # Additional templates that should be rendered to pages, maps page names to
 # template names.
@@ -327,6 +352,6 @@ texinfo_documents = [
 # texinfo_no_detailmenu = False
 
 
-def setup(app):
-    app.add_css_file("https://cdn.jsdelivr.net/npm/semantic-ui@2.4.2/dist/semantic.min.css")
-    app.add_css_file("default.css")
+# def setup(app):
+#     app.add_css_file("https://cdn.jsdelivr.net/npm/semantic-ui@2.4.2/dist/semantic.min.css")
+#     app.add_css_file("default.css")

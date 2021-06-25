@@ -158,7 +158,7 @@ class AR(distribution.Continuous):
         """
         if self.constant:
             x = at.add(
-                *[self.rho[i + 1] * value[self.p - (i + 1) : -(i + 1)] for i in range(self.p)]
+                *(self.rho[i + 1] * value[self.p - (i + 1) : -(i + 1)] for i in range(self.p))
             )
             eps = value[self.p :] - self.rho[0] - x
         else:
@@ -166,7 +166,7 @@ class AR(distribution.Continuous):
                 x = self.rho * value[:-1]
             else:
                 x = at.add(
-                    *[self.rho[i] * value[self.p - (i + 1) : -(i + 1)] for i in range(self.p)]
+                    *(self.rho[i] * value[self.p - (i + 1) : -(i + 1)] for i in range(self.p))
                 )
             eps = value[self.p :] - x
 
@@ -486,6 +486,7 @@ class MvGaussianRandomWalk(distribution.Continuous):
 
         Examples
         -------
+
         .. code-block:: python
 
             with pm.Model():
@@ -502,6 +503,7 @@ class MvGaussianRandomWalk(distribution.Continuous):
                 # draw four samples from a 2-dimensional Gaussian random walk with 10 timesteps,
                 # indexed with a (2, 2) array
                 sample = MvGaussianRandomWalk(mu, cov, shape=(10, 2)).random(size=(2, 2))
+
         """
 
         # for each draw specified by the size input, we need to draw time_steps many
