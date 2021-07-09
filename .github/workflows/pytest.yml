@@ -34,9 +34,12 @@ jobs:
             --ignore=pymc3/tests/test_model_graph.py
             --ignore=pymc3/tests/test_modelcontext.py
             --ignore=pymc3/tests/test_parallel_sampling.py
+            --ignore=pymc3/tests/test_posteriors.py
+            --ignore=pymc3/tests/test_sampling.py
             --ignore=pymc3/tests/test_profile.py
             --ignore=pymc3/tests/test_step.py
             --ignore=pymc3/tests/test_tuning.py
+            --ignore=pymc3/tests/test_transforms.py
             --ignore=pymc3/tests/test_types.py
             --ignore=pymc3/tests/test_variational_inference.py
             --ignore=pymc3/tests/test_sampling_jax.py
@@ -57,6 +60,8 @@ jobs:
             --ignore=pymc3/tests/test_distributions_random.py
             --ignore=pymc3/tests/test_idata_conversion.py
 
+          - pymc3/tests/test_distributions.py
+
           - |
             pymc3/tests/test_modelcontext.py
             pymc3/tests/test_dist_math.py
@@ -64,17 +69,26 @@ jobs:
             pymc3/tests/test_pickling.py
             pymc3/tests/test_plots.py
             pymc3/tests/test_updates.py
+            pymc3/tests/test_transforms.py
+
+          - |
+            pymc3/tests/test_parallel_sampling.py
+            pymc3/tests/test_sampling.py
+            pymc3/tests/test_tuning.py
+            pymc3/tests/test_posteriors.py
 
           - |
             pymc3/tests/test_idata_conversion.py
-            pymc3/tests/test_distributions.py
             pymc3/tests/test_distributions_random.py
+            pymc3/tests/test_distributions_timeseries.py
             pymc3/tests/test_examples.py
             pymc3/tests/test_gp.py
             pymc3/tests/test_model.py
             pymc3/tests/test_model_func.py
+            pymc3/tests/test_model_graph.py
             pymc3/tests/test_ode.py
             pymc3/tests/test_posdef_sym.py
+            pymc3/tests/test_profile.py
             pymc3/tests/test_quadpotential.py
             pymc3/tests/test_shape_handling.py
             pymc3/tests/test_step.py
@@ -124,7 +138,7 @@ jobs:
       - name: Run tests
         run: |
           conda activate pymc3-dev-py37
-          python -m pytest -vv --cov=pymc3 --cov-report=xml --cov-report term --durations=50 $TEST_SUBSET
+          python -m pytest -vv --cov=pymc3 --cov-append --cov-report=xml --cov-report term --durations=50 $TEST_SUBSET
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v1
         with:
@@ -139,8 +153,11 @@ jobs:
         test-subset:
           - |
             pymc3/tests/test_distributions_random.py
+            pymc3/tests/test_distributions_timeseries.py
           - |
+            pymc3/tests/test_parallel_sampling.py
             pymc3/tests/test_sampling.py
+            pymc3/tests/test_tuning.py
             pymc3/tests/test_shared.py
           - |
             pymc3/tests/test_gp.py
@@ -149,7 +166,9 @@ jobs:
             pymc3/tests/test_model.py
             pymc3/tests/test_model_func.py
             pymc3/tests/test_modelcontext.py
+            pymc3/tests/test_model_graph.py
             pymc3/tests/test_pickling.py
+            pymc3/tests/test_profile.py
 
       fail-fast: false
     runs-on: ${{ matrix.os }}
@@ -198,4 +217,4 @@ jobs:
         # The ">-" in the next line replaces newlines with spaces (see https://stackoverflow.com/a/66809682).
         run: >-
           conda activate pymc3-dev-py38 &&
-          python -m pytest -vv --cov=pymc3 --cov-report=xml --cov-report term --durations=50 %TEST_SUBSET%
+          python -m pytest -vv --cov=pymc3 --cov-append --cov-report=xml --cov-report term --durations=50 %TEST_SUBSET%

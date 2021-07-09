@@ -12,13 +12,18 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
+import time
+
 import aesara
 import aesara.tensor as at
 import numpy as np
 import pytest
 
+from arviz.data.inference_data import InferenceData
+
 import pymc3 as pm
 
+from pymc3.backends.base import MultiTrace
 from pymc3.tests.helpers import SeededTest
 
 
@@ -57,9 +62,22 @@ class TestSMC(SeededTest):
 
         self.muref = mu1
 
+        with pm.Model() as self.fast_model:
+            x = pm.Normal("x", 0, 1)
+            y = pm.Normal("y", x, 1, observed=0)
+
+        with pm.Model() as self.slow_model:
+            x = pm.Normal("x", 0, 1)
+            y = pm.Normal("y", x, 1, observed=100)
+
     def test_sample(self):
         with self.SMC_test:
-            mtrace = pm.sample_smc(draws=self.samples)
+
+            mtrace = pm.sample_smc(
+                draws=self.samples,
+                cores=1,  # Fails in parallel due to #4799
+                return_inferencedata=False,
+            )
 
         x = mtrace["X"]
         mu1d = np.abs(x).mean(axis=0)
@@ -70,7 +88,7 @@ class TestSMC(SeededTest):
             a = pm.Poisson("a", 5)
             b = pm.HalfNormal("b", 10)
             y = pm.Normal("y", a, b, observed=[1, 2, 3, 4])
-            trace = pm.sample_smc()
+            trace = pm.sample_smc(draws=10)
 
     def test_ml(self):
         data = np.repeat([1, 0], [50, 50])
@@ -82,7 +100,7 @@ class TestSMC(SeededTest):
             with pm.Model() as model:
                 a = pm.Beta("a", alpha, beta)
                 y = pm.Bernoulli("y", a, observed=data)
-                trace = pm.sample_smc(2000)
+                trace = pm.sample_smc(2000, return_inferencedata=False)
                 marginals.append(trace.report.log_marginal_likelihood)
         # compare to the analytical result
         assert abs(np.exp(np.mean(marginals[1]) - np.mean(marginals[0])) - 4.0) <= 1
@@ -96,7 +114,7 @@ class TestSMC(SeededTest):
                 "a": np.random.poisson(5, size=500),
                 "b_log__": np.abs(np.random.normal(0, 10, size=500)),
             }
-            trace = pm.sample_smc(500, start=start)
+            trace = pm.sample_smc(500, chains=1, start=start)
 
     def test_slowdown_warning(self):
         with aesara.config.change_flags(floatX="float32"):
@@ -104,7 +122,64 @@ class TestSMC(SeededTest):
                 with pm.Model() as model:
                     a = pm.Poisson("a", 5)
                     y = pm.Normal("y", a, 5, observed=[1, 2, 3, 4])
-                    trace = pm.sample_smc()
+                    trace = pm.sample_smc(draws=100, chains=2, cores=1)
+
+    @pytest.mark.parametrize("chains", (1, 2))
+    def test_return_datatype(self, chains):
+        draws = 10
+
+        with self.fast_model:
+            idata = pm.sample_smc(chains=chains, draws=draws)
+            mt = pm.sample_smc(chains=chains, draws=draws, return_inferencedata=False)
+
+        assert isinstance(idata, InferenceData)
+        assert "sample_stats" in idata
+        assert idata.posterior.dims["chain"] == chains
+        assert idata.posterior.dims["draw"] == draws
+
+        assert isinstance(mt, MultiTrace)
+        assert mt.nchains == chains
+        assert mt["x"].size == chains * draws
+
+    def test_convergence_checks(self):
+        with self.fast_model:
+            with pytest.warns(
+                UserWarning,
+                match="The number of samples is too small",
+            ):
+                pm.sample_smc(draws=99)
+
+    def test_parallel_sampling(self):
+        # Cache graph
+        with self.slow_model:
+            _ = pm.sample_smc(draws=10, chains=1, cores=1, return_inferencedata=False)
+
+        chains = 4
+        draws = 100
+
+        t0 = time.time()
+        with self.slow_model:
+            idata = pm.sample_smc(draws=draws, chains=chains, cores=4)
+        t_mp = time.time() - t0
+        assert idata.posterior.dims["chain"] == chains
+        assert idata.posterior.dims["draw"] == draws
+
+        t0 = time.time()
+        with self.slow_model:
+            idata = pm.sample_smc(draws=draws, chains=chains, cores=1)
+        t_seq = time.time() - t0
+        assert idata.posterior.dims["chain"] == chains
+        assert idata.posterior.dims["draw"] == draws
+
+        assert t_mp < t_seq
+
+    def test_depracated_parallel_arg(self):
+        with self.fast_model:
+            with pytest.warns(
+                DeprecationWarning,
+                match="The argument parallel is deprecated",
+            ):
+                pm.sample_smc(draws=10, chains=1, parallel=False)
 
 
 @pytest.mark.xfail(reason="SMC-ABC not refactored yet")

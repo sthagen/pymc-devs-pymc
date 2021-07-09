@@ -21,6 +21,12 @@ from collections.abc import Iterable
 
 import numpy as np
 
+from arviz import InferenceData
+from fastprogress.fastprogress import progress_bar
+
+import pymc3
+
+from pymc3.backends.arviz import dict_to_dataset, to_inference_data
 from pymc3.backends.base import MultiTrace
 from pymc3.model import modelcontext
 from pymc3.parallel_sampling import _cpu_count
@@ -31,6 +37,7 @@ def sample_smc(
     draws=2000,
     kernel="metropolis",
     n_steps=25,
+    *,
     start=None,
     tune_steps=True,
     p_acc_rate=0.85,
@@ -39,9 +46,13 @@ def sample_smc(
     save_log_pseudolikelihood=True,
     model=None,
     random_seed=-1,
-    parallel=False,
+    parallel=None,
     chains=None,
     cores=None,
+    compute_convergence_checks=True,
+    return_inferencedata=True,
+    idata_kwargs=None,
+    progressbar=True,
 ):
     r"""
     Sequential Monte Carlo based sampling.
@@ -81,16 +92,23 @@ def sample_smc(
     model: Model (optional if in ``with`` context)).
     random_seed: int
         random seed
-    parallel: bool
-        Distribute computations across cores if the number of cores is larger than 1.
-        Defaults to False.
     cores : int
         The number of chains to run in parallel. If ``None``, set to the number of CPUs in the
-        system, but at most 4.
+        system.
     chains : int
         The number of chains to sample. Running independent chains is important for some
         convergence statistics. If ``None`` (default), then set to either ``cores`` or 2, whichever
         is larger.
+    compute_convergence_checks : bool
+        Whether to compute sampler statistics like Gelman-Rubin and ``effective_n``.
+        Defaults to ``True``.
+    return_inferencedata : bool, default=True
+        Whether to return the trace as an :class:`arviz:arviz.InferenceData` (True) object or a `MultiTrace` (False)
+        Defaults to ``True``.
+    idata_kwargs : dict, optional
+        Keyword arguments for :func:`pymc3.to_inference_data`
+    progressbar : bool, optional default=True
+        Whether or not to display a progress bar in the command line.
 
     Notes
     -----
@@ -137,6 +155,16 @@ def sample_smc(
         816-832. `link <http://ascelibrary.org/doi/abs/10.1061/%28ASCE%290733-9399
         %282007%29133:7%28816%29>`__
     """
+
+    if parallel is not None:
+        warnings.warn(
+            "The argument parallel is deprecated, use the argument cores instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if parallel is False:
+            cores = 1
+
     _log = logging.getLogger("pymc3")
     _log.info("Initializing SMC sampler...")
 
@@ -190,19 +218,26 @@ def sample_smc(
     )
 
     t1 = time.time()
-    if parallel and chains > 1:
-        loggers = [_log] + [None] * (chains - 1)
+    if cores > 1:
+        pbar = progress_bar((), total=100, display=progressbar)
+        pbar.update(0)
+        pbars = [pbar] + [None] * (chains - 1)
+
         pool = mp.Pool(cores)
         results = pool.starmap(
-            sample_smc_int, [(*params, random_seed[i], i, loggers[i]) for i in range(chains)]
+            sample_smc_int, [(*params, random_seed[i], i, pbars[i]) for i in range(chains)]
         )
-
         pool.close()
         pool.join()
+
     else:
         results = []
+        pbar = progress_bar((), total=100 * chains, display=progressbar)
+        pbar.update(0)
         for i in range(chains):
-            results.append(sample_smc_int(*params, random_seed[i], i, _log))
+            pbar.offset = 100 * i
+            pbar.base_comment = f"Chain: {i+1}/{chains}"
+            results.append(sample_smc_int(*params, random_seed[i], i, pbar))
 
     (
         traces,
@@ -213,20 +248,72 @@ def sample_smc(
         accept_ratios,
         nsteps,
     ) = zip(*results)
-    trace = MultiTrace(traces)
-    trace.report._n_draws = draws
-    trace.report._n_tune = 0
-    trace.report.log_marginal_likelihood = np.array(log_marginal_likelihoods)
-    trace.report.log_pseudolikelihood = log_pseudolikelihood
-    trace.report.betas = betas
-    trace.report.accept_ratios = accept_ratios
-    trace.report.nsteps = nsteps
-    trace.report._t_sampling = time.time() - t1
 
-    if save_sim_data:
-        return trace, {modelcontext(model).observed_RVs[0].name: np.array(sim_data)}
+    trace = MultiTrace(traces)
+    idata = None
+
+    # Save sample_stats
+    _n_tune = 0
+    _t_sampling = time.time() - t1
+    if not return_inferencedata:
+        trace.report._n_draws = draws
+        trace.report._n_tune = _n_tune
+        trace.report.log_marginal_likelihood = log_marginal_likelihoods
+        trace.report.log_pseudolikelihood = log_pseudolikelihood
+        trace.report.betas = betas
+        trace.report.accept_ratios = accept_ratios
+        trace.report.nsteps = nsteps
+        trace.report._t_sampling = _t_sampling
     else:
-        return trace
+        # There is only one log_marginal_likelihood per chain, here we broadcast
+        # it to the number of draws in each chain (to avoid InferenceData
+        # warning) and fill the non-final draws with nans
+        _log_marginal_likelihoods = []
+        for chain in range(chains):
+            row = np.full(len(np.atleast_1d(betas)[chain]), np.nan)
+            row[-1] = np.atleast_1d(log_marginal_likelihoods)[chain]
+            _log_marginal_likelihoods.append(row)
+
+        # Different chains might have more iteration steps, leading to a
+        # non-square `sample_stats` dataset, we cast as `object` to avoid
+        # numpy ragged array deprecation warning
+        sample_stats = dict_to_dataset(
+            dict(
+                accept_ratios=np.array(accept_ratios, dtype=object),
+                betas=np.array(betas, dtype=object),
+                log_marginal_likelihoods=np.array(_log_marginal_likelihoods, dtype=object),
+                nsteps=np.array(nsteps, dtype=object),
+            ),
+            attrs=dict(
+                _n_tune=_n_tune,
+                _t_sampling=_t_sampling,
+            ),
+            library=pymc3,
+        )
+
+        ikwargs = dict(model=model)
+        if idata_kwargs is not None:
+            ikwargs.update(idata_kwargs)
+        idata = to_inference_data(trace, **ikwargs)
+        idata = InferenceData(**idata, sample_stats=sample_stats)
+
+    if compute_convergence_checks:
+        if draws < 100:
+            warnings.warn(
+                "The number of samples is too small to check convergence reliably.",
+                stacklevel=2,
+            )
+        else:
+            if idata is None:
+                idata = to_inference_data(trace, log_likelihood=False)
+            trace.report._run_convergence_checks(idata, model)
+    trace.report._log_summary()
+
+    posterior = idata if return_inferencedata else trace
+    if save_sim_data:
+        return posterior, {modelcontext(model).observed_RVs[0].name: np.array(sim_data)}
+    else:
+        return posterior
 
 
 def sample_smc_int(
@@ -242,7 +329,7 @@ def sample_smc_int(
     model,
     random_seed,
     chain,
-    _log,
+    progressbar=None,
 ):
     """Run one SMC instance."""
     smc = SMC(
@@ -263,14 +350,22 @@ def sample_smc_int(
     betas = []
     accept_ratios = []
     nsteps = []
+
+    if progressbar:
+        progressbar.comment = f"{getattr(progressbar, 'base_comment', '')} Stage: 0 Beta: 0"
+        progressbar.update_bar(getattr(progressbar, "offset", 0) + 0)
+
     smc.initialize_population()
     smc.setup_kernel()
     smc.initialize_logp()
 
     while smc.beta < 1:
         smc.update_weights_beta()
-        if _log is not None:
-            _log.info(f"Stage: {stage:3d} Beta: {smc.beta:.3f}")
+        if progressbar:
+            progressbar.comment = (
+                f"{getattr(progressbar, 'base_comment', '')} Stage: {stage} Beta: {smc.beta:.3f}"
+            )
+            progressbar.update_bar(getattr(progressbar, "offset", 0) + int(smc.beta * 100))
         smc.update_proposal()
         smc.resample()
         smc.mutate()

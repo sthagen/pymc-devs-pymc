@@ -17,16 +17,35 @@ import warnings
 import aesara.tensor as at
 import numpy as np
 
-from aesara.tensor.slinalg import Solve, cholesky  # pylint: disable=unused-import
+from aesara.tensor.slinalg import (  # noqa: W0611; pylint: disable=unused-import
+    cholesky,
+    solve,
+)
+from aesara.tensor.slinalg import (  # noqa: W0611; pylint: disable=unused-import
+    solve_lower_triangular as solve_lower,
+)
+from aesara.tensor.slinalg import (  # noqa: W0611; pylint: disable=unused-import
+    solve_upper_triangular as solve_upper,
+)
 from aesara.tensor.var import TensorConstant
 from scipy.cluster.vq import kmeans
 
-solve_lower = Solve(A_structure="lower_triangular")
-solve_upper = Solve(A_structure="upper_triangular")
-solve = Solve(A_structure="general")
-
 
 def infer_shape(X, n_points=None):
+    R"""
+    Maybe attempt to infer the shape of a Gaussian process input matrix.
+
+    If a specific shape cannot be inferred, for instance if X is symbolic, then an
+    error is raised.
+
+    Parameters
+    ----------
+    X: array-like
+        Gaussian process input matrix.
+    n_points: None or int
+        The number of rows of `X`.  If `None`, the number of rows of `X` is
+        calculated from `X` if possible.
+    """
     if n_points is None:
         try:
             n_points = np.int(X.shape[0])
@@ -35,12 +54,36 @@ def infer_shape(X, n_points=None):
     return n_points
 
 
-def stabilize(K):
-    """adds small diagonal to a covariance matrix"""
-    return K + 1e-6 * at.identity_like(K)
+def stabilize(K, c=1e-6):
+    R"""
+    Adds small diagonal to a covariance matrix.
+
+    Often the matrices calculated from covariance functions, `K = cov_func(X)`
+    do not appear numerically to be positive semi-definite.  Adding a small
+    correction, `c`, to the diagonal is usually enough to fix this.
+
+    Parameters
+    ----------
+    K: array-like
+        A square covariance or kernel matrix.
+    c: float
+        A small constant.
+    """
+    return K + c * at.identity_like(K)
 
 
 def kmeans_inducing_points(n_inducing, X):
+    R"""
+    Use the K-means algorithm to initialize the locations `X` for the inducing
+    points `fu`.
+
+    Parameters
+    ----------
+    n_inducing: int
+        The number of inducing points (or k, the number of clusters)
+    X: array-like
+        Gaussian process input matrix.
+    """
     # first whiten X
     if isinstance(X, TensorConstant):
         X = X.value
