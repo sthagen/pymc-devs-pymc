@@ -35,7 +35,6 @@ from pymc3.distributions.dist_math import (
     binomln,
     bound,
     factln,
-    incomplete_beta,
     log_diff_normal_cdf,
     logpow,
     normal_lccdf,
@@ -43,7 +42,7 @@ from pymc3.distributions.dist_math import (
 )
 from pymc3.distributions.distribution import Discrete
 from pymc3.distributions.logprob import _logcdf, _logp
-from pymc3.math import log1mexp, logaddexp, logsumexp, sigmoid
+from pymc3.math import sigmoid
 
 __all__ = [
     "Binomial",
@@ -145,25 +144,20 @@ class Binomial(Discrete):
 
         Parameters
         ----------
-        value: numeric
-            Value for which log CDF is calculated.
+        value: numeric or np.ndarray or aesara.tensor
+            Value(s) for which log CDF is calculated. If the log CDF for multiple
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
         TensorVariable
         """
-        # incomplete_beta function can only handle scalar values (see #4342)
-        if np.ndim(value):
-            raise TypeError(
-                f"Binomial.logcdf expects a scalar value but received a {np.ndim(value)}-dimensional object."
-            )
-
         value = at.floor(value)
 
         return bound(
             at.switch(
                 at.lt(value, n),
-                at.log(incomplete_beta(n - value, value + 1, 1 - p)),
+                at.log(at.betainc(n - value, value + 1, 1 - p)),
                 0,
             ),
             0 <= value,
@@ -285,7 +279,7 @@ class BetaBinomial(Discrete):
         return bound(
             at.switch(
                 at.lt(value, n),
-                logsumexp(
+                at.logsumexp(
                     BetaBinomial.logp(at.arange(safe_lower, value + 1), n, alpha, beta),
                     keepdims=False,
                 ),
@@ -732,21 +726,16 @@ class NegativeBinomial(Discrete):
 
         Parameters
         ----------
-        value: numeric
-            Value for which log CDF is calculated.
+        value: numeric or np.ndarray or aesara.tensor
+            Value(s) for which log CDF is calculated. If the log CDF for multiple
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
         TensorVariable
         """
-        # incomplete_beta function can only handle scalar values (see #4342)
-        if np.ndim(value):
-            raise TypeError(
-                f"NegativeBinomial.logcdf expects a scalar value but received a {np.ndim(value)}-dimensional object."
-            )
-
         return bound(
-            at.log(incomplete_beta(n, at.floor(value) + 1, p)),
+            at.log(at.betainc(n, at.floor(value) + 1, p)),
             0 <= value,
             0 < n,
             0 <= p,
@@ -837,7 +826,7 @@ class Geometric(Discrete):
         """
 
         return bound(
-            log1mexp(-at.log1p(-p) * value),
+            at.log1mexp(at.log1p(-p) * value),
             0 <= value,
             0 <= p,
             p <= 1,
@@ -956,7 +945,7 @@ class HyperGeometric(Discrete):
         return bound(
             at.switch(
                 at.lt(value, n),
-                logsumexp(
+                at.logsumexp(
                     HyperGeometric.logp(at.arange(safe_lower, value + 1), good, bad, n),
                     keepdims=False,
                 ),
@@ -1311,7 +1300,7 @@ class ZeroInflatedPoisson(Discrete):
         logp_val = at.switch(
             at.gt(value, 0),
             at.log(psi) + _logp(poisson, value, {}, theta),
-            logaddexp(at.log1p(-psi), at.log(psi) - theta),
+            at.logaddexp(at.log1p(-psi), at.log(psi) - theta),
         )
 
         return bound(
@@ -1339,7 +1328,7 @@ class ZeroInflatedPoisson(Discrete):
         """
 
         return bound(
-            logaddexp(at.log1p(-psi), at.log(psi) + _logcdf(poisson, value, {}, theta)),
+            at.logaddexp(at.log1p(-psi), at.log(psi) + _logcdf(poisson, value, {}, theta)),
             0 <= value,
             0 <= psi,
             psi <= 1,
@@ -1441,7 +1430,7 @@ class ZeroInflatedBinomial(Discrete):
         logp_val = at.switch(
             at.gt(value, 0),
             at.log(psi) + _logp(binomial, value, {}, n, p),
-            logaddexp(at.log1p(-psi), at.log(psi) + n * at.log1p(-p)),
+            at.logaddexp(at.log1p(-psi), at.log(psi) + n * at.log1p(-p)),
         )
 
         return bound(
@@ -1461,22 +1450,17 @@ class ZeroInflatedBinomial(Discrete):
 
         Parameters
         ----------
-        value: numeric
-            Value for which log CDF is calculated.
+        value: numeric or np.ndarray or aesara.tensor
+            Value(s) for which log CDF is calculated. If the log CDF for multiple
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
         TensorVariable
         """
 
-        # logcdf can only handle scalar values due to limitation in Binomial.logcdf
-        if np.ndim(value):
-            raise TypeError(
-                f"ZeroInflatedBinomial.logcdf expects a scalar value but received a {np.ndim(value)}-dimensional object."
-            )
-
         return bound(
-            logaddexp(at.log1p(-psi), at.log(psi) + _logcdf(binomial, value, {}, n, p)),
+            at.logaddexp(at.log1p(-psi), at.log(psi) + _logcdf(binomial, value, {}, n, p)),
             0 <= value,
             value <= n,
             0 <= psi,
@@ -1599,7 +1583,7 @@ class ZeroInflatedNegativeBinomial(Discrete):
             at.switch(
                 at.gt(value, 0),
                 at.log(psi) + _logp(nbinom, value, {}, n, p),
-                logaddexp(at.log1p(-psi), at.log(psi) + n * at.log(p)),
+                at.logaddexp(at.log1p(-psi), at.log(psi) + n * at.log(p)),
             ),
             0 <= value,
             0 <= psi,
@@ -1616,21 +1600,16 @@ class ZeroInflatedNegativeBinomial(Discrete):
 
         Parameters
         ----------
-        value: numeric
-            Value for which log CDF is calculated.
+        value: numeric or np.ndarray or aesara.tensor
+            Value(s) for which log CDF is calculated. If the log CDF for multiple
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
         TensorVariable
         """
-        # logcdf can only handle scalar values due to limitation in NegativeBinomial.logcdf
-        if np.ndim(value):
-            raise TypeError(
-                f"ZeroInflatedNegativeBinomial.logcdf expects a scalar value but received a {np.ndim(value)}-dimensional object."
-            )
-
         return bound(
-            logaddexp(at.log1p(-psi), at.log(psi) + _logcdf(nbinom, value, {}, n, p)),
+            at.logaddexp(at.log1p(-psi), at.log(psi) + _logcdf(nbinom, value, {}, n, p)),
             0 <= value,
             0 <= psi,
             psi <= 1,

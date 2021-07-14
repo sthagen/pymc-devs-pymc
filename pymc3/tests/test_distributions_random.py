@@ -24,8 +24,19 @@ import pytest
 import scipy.stats as st
 
 from numpy.testing import assert_almost_equal, assert_array_almost_equal
-from packaging.version import parse
-from scipy import __version__ as scipy_version
+
+try:
+    from polyagamma import random_polyagamma
+
+    _polyagamma_not_installed = False
+except ImportError:  # pragma: no cover
+
+    _polyagamma_not_installed = True
+
+    def random_polyagamma(*args, **kwargs):
+        raise RuntimeError("polyagamma package is not installed!")
+
+
 from scipy.special import expit
 
 import pymc3 as pm
@@ -46,8 +57,6 @@ from pymc3.tests.test_distributions import (
     build_model,
     product,
 )
-
-SCIPY_VERSION = parse(scipy_version)
 
 
 def pymc3_random(
@@ -1317,16 +1326,34 @@ class TestWeibull(BaseTestDistribution):
     ]
 
 
-@pytest.mark.skipif(
-    condition=(SCIPY_VERSION < parse("1.4.0")),
-    reason="betabinom is new in Scipy 1.4.0",
-)
 class TestBetaBinomial(BaseTestDistribution):
     pymc_dist = pm.BetaBinomial
     pymc_dist_params = {"alpha": 2.0, "beta": 1.0, "n": 5}
     expected_rv_op_params = {"n": 5, "alpha": 2.0, "beta": 1.0}
     reference_dist_params = {"n": 5, "a": 2.0, "b": 1.0}
     reference_dist = seeded_scipy_distribution_builder("betabinom")
+    tests_to_run = [
+        "check_pymc_params_match_rv_op",
+        "check_pymc_draws_match_reference",
+        "check_rv_size",
+    ]
+
+
+@pytest.mark.skipif(
+    condition=_polyagamma_not_installed,
+    reason="`polyagamma package is not available/installed.",
+)
+class TestPolyaGamma(BaseTestDistribution):
+    def polyagamma_rng_fn(self, size, h, z, rng):
+        return random_polyagamma(h, z, size=size, random_state=rng._bit_generator)
+
+    pymc_dist = pm.PolyaGamma
+    pymc_dist_params = {"h": 1.0, "z": 0.0}
+    expected_rv_op_params = {"h": 1.0, "z": 0.0}
+    reference_dist_params = {"h": 1.0, "z": 0.0}
+    reference_dist = lambda self: functools.partial(
+        self.polyagamma_rng_fn, rng=self.get_random_state()
+    )
     tests_to_run = [
         "check_pymc_params_match_rv_op",
         "check_pymc_draws_match_reference",
