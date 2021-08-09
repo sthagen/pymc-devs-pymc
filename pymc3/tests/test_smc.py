@@ -12,18 +12,18 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
-import time
-
-import aesara
 import aesara.tensor as at
 import numpy as np
 import pytest
+import scipy.stats as st
 
 from arviz.data.inference_data import InferenceData
 
 import pymc3 as pm
 
+from pymc3.aesaraf import floatX
 from pymc3.backends.base import MultiTrace
+from pymc3.smc.smc import SMC
 from pymc3.tests.helpers import SeededTest
 
 
@@ -66,29 +66,51 @@ class TestSMC(SeededTest):
             x = pm.Normal("x", 0, 1)
             y = pm.Normal("y", x, 1, observed=0)
 
-        with pm.Model() as self.slow_model:
-            x = pm.Normal("x", 0, 1)
-            y = pm.Normal("y", x, 1, observed=100)
-
     def test_sample(self):
         with self.SMC_test:
-
-            mtrace = pm.sample_smc(
-                draws=self.samples,
-                cores=1,  # Fails in parallel due to #4799
-                return_inferencedata=False,
-            )
+            mtrace = pm.sample_smc(draws=self.samples, return_inferencedata=False)
 
         x = mtrace["X"]
         mu1d = np.abs(x).mean(axis=0)
         np.testing.assert_allclose(self.muref, mu1d, rtol=0.0, atol=0.03)
 
-    def test_discrete_continuous(self):
-        with pm.Model() as model:
-            a = pm.Poisson("a", 5)
-            b = pm.HalfNormal("b", 10)
-            y = pm.Normal("y", a, b, observed=[1, 2, 3, 4])
-            trace = pm.sample_smc(draws=10)
+    def test_discrete_rounding_proposal(self):
+        """
+        Test that discrete variable values are automatically rounded
+        in SMC logp functions
+        """
+
+        with pm.Model() as m:
+            z = pm.Bernoulli("z", p=0.7)
+            like = pm.Potential("like", z * 1.0)
+
+        smc = SMC(model=m)
+        smc.initialize_population()
+        smc.setup_kernel()
+        smc.initialize_logp()
+
+        assert smc.prior_logp_func(floatX(np.array([-0.51]))) == -np.inf
+        assert np.isclose(smc.prior_logp_func(floatX(np.array([-0.49]))), np.log(0.3))
+        assert np.isclose(smc.prior_logp_func(floatX(np.array([0.49]))), np.log(0.3))
+        assert np.isclose(smc.prior_logp_func(floatX(np.array([0.51]))), np.log(0.7))
+        assert smc.prior_logp_func(floatX(np.array([1.51]))) == -np.inf
+
+    def test_unobserved_discrete(self):
+        n = 10
+        rng = self.get_random_state()
+
+        z_true = np.zeros(n, dtype=int)
+        z_true[int(n / 2) :] = 1
+        y = st.norm(np.array([-1, 1])[z_true], 0.25).rvs(random_state=rng)
+
+        with pm.Model() as m:
+            z = pm.Bernoulli("z", p=0.5, size=n)
+            mu = pm.math.switch(z, 1.0, -1.0)
+            like = pm.Normal("like", mu=mu, sigma=0.25, observed=y)
+
+            trace = pm.sample_smc(chains=1, return_inferencedata=False)
+
+        assert np.all(np.median(trace["z"], axis=0) == z_true)
 
     def test_ml(self):
         data = np.repeat([1, 0], [50, 50])
@@ -116,14 +138,6 @@ class TestSMC(SeededTest):
             }
             trace = pm.sample_smc(500, chains=1, start=start)
 
-    def test_slowdown_warning(self):
-        with aesara.config.change_flags(floatX="float32"):
-            with pytest.warns(UserWarning, match="SMC sampling may run slower due to"):
-                with pm.Model() as model:
-                    a = pm.Poisson("a", 5)
-                    y = pm.Normal("y", a, 5, observed=[1, 2, 3, 4])
-                    trace = pm.sample_smc(draws=100, chains=2, cores=1)
-
     @pytest.mark.parametrize("chains", (1, 2))
     def test_return_datatype(self, chains):
         draws = 10
@@ -149,31 +163,7 @@ class TestSMC(SeededTest):
             ):
                 pm.sample_smc(draws=99)
 
-    def test_parallel_sampling(self):
-        # Cache graph
-        with self.slow_model:
-            _ = pm.sample_smc(draws=10, chains=1, cores=1, return_inferencedata=False)
-
-        chains = 4
-        draws = 100
-
-        t0 = time.time()
-        with self.slow_model:
-            idata = pm.sample_smc(draws=draws, chains=chains, cores=4)
-        t_mp = time.time() - t0
-        assert idata.posterior.dims["chain"] == chains
-        assert idata.posterior.dims["draw"] == draws
-
-        t0 = time.time()
-        with self.slow_model:
-            idata = pm.sample_smc(draws=draws, chains=chains, cores=1)
-        t_seq = time.time() - t0
-        assert idata.posterior.dims["chain"] == chains
-        assert idata.posterior.dims["draw"] == draws
-
-        assert t_mp < t_seq
-
-    def test_depracated_parallel_arg(self):
+    def test_deprecated_parallel_arg(self):
         with self.fast_model:
             with pytest.warns(
                 DeprecationWarning,
