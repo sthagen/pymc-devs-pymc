@@ -46,7 +46,7 @@ _beta_clip_values = {
 }
 
 
-def bound(logp, *conditions, **kwargs):
+def bound(logp, *conditions, broadcast_conditions=True):
     """
     Bounds a log probability density with several conditions.
     When conditions are not met, the logp values are replaced by -inf.
@@ -76,13 +76,11 @@ def bound(logp, *conditions, **kwargs):
     try:
         from pymc3.model import modelcontext
 
-        model = modelcontext(kwargs.get("model"))
+        model = modelcontext(None)
         if not model.check_bounds:
             return logp
-    except TypeError:  # No model found
-        pass
-
-    broadcast_conditions = kwargs.get("broadcast_conditions", True)
+    except TypeError:
+        pass  # no model found
 
     if broadcast_conditions:
         alltrue = alltrue_elemwise
@@ -387,7 +385,7 @@ i0e_scalar = I0e(upgrade_to_float_no_complex, name="i0e")
 i0e = Elemwise(i0e_scalar, name="Elemwise{i0e,no_inplace}")
 
 
-def random_choice(*args, **kwargs):
+def random_choice(p, size):
     """Return draws from categorical probability functions
 
     Args:
@@ -403,8 +401,6 @@ def random_choice(*args, **kwargs):
         random sample: array
 
     """
-    p = kwargs.pop("p")
-    size = kwargs.pop("size")
     k = p.shape[-1]
 
     if p.ndim > 1:
