@@ -149,8 +149,28 @@ class TestSMC(SeededTest):
                 tune_steps=False,
                 p_acc_rate=0.5,
                 return_inferencedata=False,
+                kernel=pm.smc.IMH,
             )
+
             assert trace.report.threshold == 0.7
+            assert trace.report.n_draws == 10
+            assert trace.report.n_tune == 15
+            assert trace.report.tune_steps is False
+            assert trace.report.p_acc_rate == 0.5
+
+        with self.fast_model:
+            trace = pm.sample_smc(
+                draws=10,
+                chains=1,
+                threshold=0.95,
+                n_steps=15,
+                tune_steps=False,
+                p_acc_rate=0.5,
+                return_inferencedata=False,
+                kernel=pm.smc.MH,
+            )
+
+            assert trace.report.threshold == 0.95
             assert trace.report.n_draws == 10
             assert trace.report.n_tune == 15
             assert trace.report.tune_steps is False
@@ -343,3 +363,14 @@ class TestMHKernel(SeededTest):
         post = idata.posterior.stack(sample=("chain", "draw"))
         assert np.abs(post["mu"].mean() - 10) < 0.1
         assert np.abs(post["sigma"].mean() - 0.5) < 0.05
+
+    def test_proposal_dist_shape(self):
+        with pm.Model() as m:
+            x = pm.Normal("x", 0, 1)
+            y = pm.Normal("y", x, 1, observed=0)
+            trace = pm.sample_smc(
+                draws=10,
+                chains=1,
+                kernel=pm.smc.MH,
+                return_inferencedata=False,
+            )

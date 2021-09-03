@@ -34,6 +34,7 @@ from pymc3.backends.ndarray import NDArray
 from pymc3.blocking import DictToArrayBijection
 from pymc3.model import Point, modelcontext
 from pymc3.sampling import sample_prior_predictive
+from pymc3.step_methods.metropolis import MultivariateNormalProposal
 from pymc3.vartypes import discrete_types
 
 
@@ -351,7 +352,7 @@ class IMH(SMC_KERNEL):
         self.p_acc_rate = p_acc_rate
 
         self.max_steps = n_steps
-        self.proposed = self.proposed = self.draws * self.n_steps
+        self.proposed = self.draws * self.n_steps
         self.proposal_dist = None
         self.acc_rate = None
 
@@ -430,16 +431,26 @@ class IMH(SMC_KERNEL):
 class MH(SMC_KERNEL):
     """Metropolis-Hastings SMC kernel"""
 
-    def __init__(self, *args, n_steps=25, **kwargs):
+    def __init__(self, *args, n_steps=25, tune_steps=True, p_acc_rate=0.85, **kwargs):
         """
         Parameters
         ----------
         n_steps: int
             The number of steps of each Markov Chain.
+        tune_steps: bool
+            Whether to compute the number of steps automatically or not. Defaults to True
+        p_acc_rate: float
+            Used to compute ``n_steps`` when ``tune_steps == True``. The higher the value of
+            ``p_acc_rate`` the higher the number of steps computed automatically. Defaults to 0.85.
+            It should be between 0 and 1.
         """
         super().__init__(*args, **kwargs)
         self.n_steps = n_steps
+        self.tune_steps = tune_steps
+        self.p_acc_rate = p_acc_rate
 
+        self.max_steps = n_steps
+        self.proposed = self.draws * self.n_steps
         self.proposal_dist = None
         self.proposal_scales = None
         self.chain_acc_rate = None
@@ -449,10 +460,6 @@ class MH(SMC_KERNEL):
         Dimension specific scaling is provided by self.proposal_scales and set in self.tune()
         """
         ndim = self.tempered_posterior.shape[1]
-        self.proposal_dist = multivariate_normal(
-            mean=np.zeros(ndim),
-            cov=np.eye(ndim),
-        )
         self.proposal_scales = np.full(self.draws, min(1, 2.38 ** 2 / ndim))
 
     def resample(self):
@@ -462,12 +469,28 @@ class MH(SMC_KERNEL):
             self.chain_acc_rate = self.chain_acc_rate[self.resampling_indexes]
 
     def tune(self):
-        """Update proposal scales for each particle dimension"""
+        """Update proposal scales for each particle dimension and update number of MH steps"""
         if self.iteration > 1:
             # Rescale based on distance to 0.234 acceptance rate
             chain_scales = np.exp(np.log(self.proposal_scales) + (self.chain_acc_rate - 0.234))
             # Interpolate between individual and population scales
-            self.proposal_scales = 0.5 * chain_scales + 0.5 * chain_scales.mean()
+            self.proposal_scales = 0.5 * (chain_scales + chain_scales.mean())
+
+            if self.tune_steps:
+                acc_rate = max(1.0 / self.proposed, self.chain_acc_rate.mean())
+                self.n_steps = min(
+                    self.max_steps,
+                    max(2, int(np.log(1 - self.p_acc_rate) / np.log(1 - acc_rate))),
+                )
+            self.proposed = self.draws * self.n_steps
+
+        # Update MVNormal proposal based on the covariance of the tempered posterior.
+        cov = np.cov(self.tempered_posterior, ddof=0, rowvar=0)
+        cov = np.atleast_2d(cov)
+        cov += 1e-6 * np.eye(cov.shape[0])
+        if np.isnan(cov).any() or np.isinf(cov).any():
+            raise ValueError('Sample covariances not valid! Likely "draws" is too small!')
+        self.proposal_dist = MultivariateNormalProposal(cov)
 
     def mutate(self):
         """Metropolis-Hastings perturbation."""
@@ -477,7 +500,7 @@ class MH(SMC_KERNEL):
         for n_step in range(self.n_steps):
             proposal = floatX(
                 self.tempered_posterior
-                + self.proposal_dist.rvs(size=self.draws) * self.proposal_scales[:, None]
+                + self.proposal_dist(num_draws=self.draws) * self.proposal_scales[:, None]
             )
             ll = np.array([self.likelihood_logp_func(prop) for prop in proposal])
             pl = np.array([self.prior_logp_func(prop) for prop in proposal])
@@ -508,6 +531,8 @@ class MH(SMC_KERNEL):
         stats.update(
             {
                 "_n_tune": self.n_steps,  # Default property name used in `SamplerReport`
+                "tune_steps": self.tune_steps,
+                "p_acc_rate": self.p_acc_rate,
             }
         )
         return stats
