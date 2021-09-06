@@ -650,6 +650,7 @@ class Model(Factor, WithMemoization, metaclass=ContextMeta):
         # The sequence of model-generated RNGs
         self.rng_seq = []
         self._initial_values = {}
+        self._initial_point_cache = {}
 
         if self.parent is not None:
             self.named_vars = treedict(parent=self.parent.named_vars)
@@ -913,18 +914,41 @@ class Model(Factor, WithMemoization, metaclass=ContextMeta):
         return inputvars(self.unobserved_RVs)
 
     @property
+    def disc_vars(self):
+        """All the discrete variables in the model"""
+        return list(typefilter(self.value_vars, discrete_types))
+
+    @property
+    def cont_vars(self):
+        """All the continuous variables in the model"""
+        return list(typefilter(self.value_vars, continuous_types))
+
+    @property
     def test_point(self) -> Dict[str, np.ndarray]:
         """Deprecated alias for `Model.initial_point`."""
         warnings.warn(
-            "`Model.test_point` has been deprecated. Use `Model.initial_point` instead.",
+            "`Model.test_point` has been deprecated. Use `Model.initial_point` or `Model.recompute_initial_point()`.",
             DeprecationWarning,
         )
         return self.initial_point
 
     @property
     def initial_point(self) -> Dict[str, np.ndarray]:
-        """Maps names of variables to initial values."""
-        return Point(list(self.initial_values.items()), model=self)
+        """Maps free variable names to transformed, numeric initial values."""
+        if set(self._initial_point_cache) != {get_var_name(k) for k in self.initial_values}:
+            return self.recompute_initial_point()
+        return self._initial_point_cache
+
+    def recompute_initial_point(self) -> Dict[str, np.ndarray]:
+        """Recomputes numeric initial values for all free model variables.
+
+        Returns
+        -------
+        initial_point : dict
+            Maps free variable names to transformed, numeric initial values.
+        """
+        self._initial_point_cache = Point(list(self.initial_values.items()), model=self)
+        return self._initial_point_cache
 
     @property
     def initial_values(self) -> Dict[TensorVariable, np.ndarray]:
@@ -934,16 +958,6 @@ class Model(Factor, WithMemoization, metaclass=ContextMeta):
         For a name-based dictionary use the `initial_point` property.
         """
         return self._initial_values
-
-    @property
-    def disc_vars(self):
-        """All the discrete variables in the model"""
-        return list(typefilter(self.value_vars, discrete_types))
-
-    @property
-    def cont_vars(self):
-        """All the continuous variables in the model"""
-        return list(typefilter(self.value_vars, continuous_types))
 
     def set_initval(self, rv_var, initval):
         if initval is not None:
