@@ -131,9 +131,9 @@ def dict_to_dataset(
         for name, vals in data.items():
             vals = np.atleast_1d(vals)
             val_dims = dims.get(name)
-            val_dims, coords = generate_dims_coords(vals.shape, name, dims=val_dims, coords=coords)
-            coords = {key: xr.IndexVariable((key,), data=coords[key]) for key in val_dims}
-            out_data[name] = xr.DataArray(vals, dims=val_dims, coords=coords)
+            val_dims, crds = generate_dims_coords(vals.shape, name, dims=val_dims, coords=coords)
+            crds = {key: xr.IndexVariable((key,), data=crds[key]) for key in val_dims}
+            out_data[name] = xr.DataArray(vals, dims=val_dims, coords=crds)
         return xr.Dataset(data_vars=out_data, attrs=make_attrs(attrs=attrs, library=library))
 
 
@@ -222,10 +222,12 @@ class InferenceDataConverter:  # pylint: disable=too-many-instance-attributes
             aelem = arbitrary_element(get_from)
             self.ndraws = aelem.shape[0]
 
-        self.coords = {} if coords is None else coords
-        if hasattr(self.model, "coords"):
-            self.coords = {**self.model.coords, **self.coords}
-        self.coords = {key: value for key, value in self.coords.items() if value is not None}
+        self.coords = {**self.model.coords, **(coords or {})}
+        self.coords = {
+            cname: np.array(cvals) if isinstance(cvals, tuple) else cvals
+            for cname, cvals in self.coords.items()
+            if cvals is not None
+        }
 
         self.dims = {} if dims is None else dims
         if hasattr(self.model, "RV_dims"):
