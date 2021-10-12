@@ -4,19 +4,16 @@ channels:
 - defaults
 dependencies:
 - aesara>=2.1.0
-- arviz>=0.11.2
+- arviz>=0.11.4
 - cachetools>=4.2.1
 - cloudpickle
 - fastprogress>=0.2.0
-- h5py>=2.7
-- ipython>=7.16
-- libblas=*=*mkl
-- mkl-service
+- h5py
+- ipython
 - myst-nb
-- nbsphinx>=0.4
 - numpy>=1.15.0
 - numpydoc>=0.9
-- pandas
+- pandas>=0.24.0
 - pre-commit>=2.8.0
 - pydata-sphinx-theme
 - pytest-cov>=2.5
@@ -26,7 +23,10 @@ dependencies:
 - recommonmark>=0.4
 - scipy>1.4.1
 - sphinx-autobuild>=0.7
+- sphinx-notfound-page
 - sphinx-panels
 - sphinx>=1.5
 - typing-extensions>=3.7.4
 - watermark
+- pip:
+  - sphinx-design
