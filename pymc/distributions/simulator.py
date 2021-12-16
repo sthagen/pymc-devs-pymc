@@ -18,14 +18,14 @@ import aesara
 import aesara.tensor as at
 import numpy as np
 
+from aeppl.logprob import _logprob
 from aesara.graph.op import Apply, Op
 from aesara.tensor.random.op import RandomVariable
 from aesara.tensor.var import TensorVariable
 from scipy.spatial import cKDTree
 
 from pymc.aesaraf import floatX
-from pymc.distributions.distribution import NoDistribution
-from pymc.distributions.logprob import _logp
+from pymc.distributions.distribution import NoDistribution, _get_moment
 
 __all__ = ["Simulator"]
 
@@ -217,14 +217,15 @@ class Simulator(NoDistribution):
         # NoDistribution.register(rv_type)
         NoDistribution.register(SimulatorRV)
 
-        # @_logp.register(rv_type)
-        @_logp.register(SimulatorRV)
-        def logp(op, sim_rv, rvs_to_values, *sim_params, **kwargs):
-            value_var = rvs_to_values.get(sim_rv, sim_rv)
-            return cls.logp(
-                value_var,
-                sim_rv,
-            )
+        @_logprob.register(SimulatorRV)
+        def logp(op, value_var_list, *dist_params, **kwargs):
+            _dist_params = dist_params[3:]
+            value_var = value_var_list[0]
+            return cls.logp(value_var, op, dist_params)
+
+        @_get_moment.register(SimulatorRV)
+        def get_moment(op, rv, size, *rv_inputs):
+            return cls.get_moment(rv, size, *rv_inputs)
 
         cls.rv_op = sim_op
         return super().__new__(cls, name, *params, **kwargs)
@@ -234,7 +235,13 @@ class Simulator(NoDistribution):
         return super().dist(params, **kwargs)
 
     @classmethod
-    def logp(cls, value, sim_rv):
+    def get_moment(cls, rv, size, *sim_inputs):
+        # Take the mean of 10 draws
+        multiple_sim = rv.owner.op(*sim_inputs, size=at.concatenate([[10], rv.shape]))
+        return at.mean(multiple_sim, axis=0)
+
+    @classmethod
+    def logp(cls, value, sim_op, sim_inputs):
         # Use a new rng to avoid non-randomness in parallel sampling
         # TODO: Model rngs should be updated prior to multiprocessing split,
         #  in which case this would not be needed. However, that would have to be
@@ -243,8 +250,7 @@ class Simulator(NoDistribution):
         rng.tag.is_rng = True
 
         # Create a new simulatorRV with identical inputs as the original one
-        sim_op = sim_rv.owner.op
-        sim_value = sim_op.make_node(rng, *sim_rv.owner.inputs[1:]).default_output()
+        sim_value = sim_op.make_node(rng, *sim_inputs[1:]).default_output()
         sim_value.name = "sim_value"
 
         return sim_op.distance(

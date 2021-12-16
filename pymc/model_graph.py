@@ -16,6 +16,7 @@ import warnings
 from collections import defaultdict, deque
 from typing import Dict, Iterator, NewType, Optional, Set
 
+from aesara import function
 from aesara.compile.sharedvalue import SharedVariable
 from aesara.graph.basic import walk
 from aesara.tensor.random.op import RandomVariable
@@ -159,6 +160,9 @@ class ModelGraph:
 
         graph.node(var_name.replace(":", "&"), **kwargs)
 
+    def _eval(self, var):
+        return function([], var, mode="FAST_COMPILE")()
+
     def get_plates(self):
         """Rough but surprisingly accurate plate detection.
 
@@ -174,11 +178,11 @@ class ModelGraph:
             v = self.model[var_name]
             if var_name in self.model.RV_dims:
                 plate_label = " x ".join(
-                    f"{d} ({self.model.dim_lengths[d].eval()})"
+                    f"{d} ({self._eval(self.model.dim_lengths[d])})"
                     for d in self.model.RV_dims[var_name]
                 )
             else:
-                plate_label = " x ".join(map(str, v.shape.eval()))
+                plate_label = " x ".join(map(str, self._eval(v.shape)))
             plates[plate_label].add(var_name)
         return plates
 
@@ -233,6 +237,31 @@ def model_to_graphviz(model=None, *, formatting: str = "plain"):
         The model to plot. Not required when called from inside a modelcontext.
     formatting : str
         one of { "plain" }
+
+    Examples
+    --------
+    How to plot the graph of the model.
+
+    .. code-block:: python
+
+        import numpy as np
+        from pymc import HalfCauchy, Model, Normal, model_to_graphviz
+
+        J = 8
+        y = np.array([28, 8, -3, 7, -1, 1, 18, 12])
+        sigma = np.array([15, 10, 16, 11, 9, 11, 10, 18])
+
+        with Model() as schools:
+
+            eta = Normal("eta", 0, 1, shape=J)
+            mu = Normal("mu", 0, sigma=1e6)
+            tau = HalfCauchy("tau", 25)
+
+            theta = mu + tau * eta
+
+            obs = Normal("obs", theta, sigma=sigma, observed=y)
+
+        model_to_graphviz(schools)
     """
     if not "plain" in formatting:
         raise ValueError(f"Unsupported formatting for graph nodes: '{formatting}'. See docstring.")

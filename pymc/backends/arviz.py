@@ -24,7 +24,6 @@ from arviz.data.base import CoordSpec, DimSpec, dict_to_dataset, requires
 import pymc
 
 from pymc.aesaraf import extract_obs_data
-from pymc.distributions import logpt
 from pymc.model import modelcontext
 from pymc.util import get_default_varnames
 
@@ -40,6 +39,26 @@ _log = logging.getLogger("pymc")
 
 # random variable object ...
 Var = Any  # pylint: disable=invalid-name
+
+
+def find_observations(model: Optional["Model"]) -> Optional[Dict[str, Var]]:
+    """If there are observations available, return them as a dictionary."""
+    if model is None:
+        return None
+
+    observations = {}
+    for obs in model.observed_RVs:
+        aux_obs = getattr(obs.tag, "observations", None)
+        if aux_obs is not None:
+            try:
+                obs_data = extract_obs_data(aux_obs)
+                observations[obs.name] = obs_data
+            except TypeError:
+                warnings.warn(f"Could not extract data from symbolic observation {obs}")
+        else:
+            warnings.warn(f"No data for observation {obs}")
+
+    return observations
 
 
 class _DefaultTrace:
@@ -196,25 +215,7 @@ class InferenceDataConverter:  # pylint: disable=too-many-instance-attributes
             self.dims = {**model_dims, **self.dims}
 
         self.density_dist_obs = density_dist_obs
-        self.observations = self.find_observations()
-
-    def find_observations(self) -> Optional[Dict[str, Var]]:
-        """If there are observations available, return them as a dictionary."""
-        if self.model is None:
-            return None
-        observations = {}
-        for obs in self.model.observed_RVs:
-            aux_obs = getattr(obs.tag, "observations", None)
-            if aux_obs is not None:
-                try:
-                    obs_data = extract_obs_data(aux_obs)
-                    observations[obs.name] = obs_data
-                except TypeError:
-                    warnings.warn(f"Could not extract data from symbolic observation {obs}")
-            else:
-                warnings.warn(f"No data for observation {obs}")
-
-        return observations
+        self.observations = find_observations(self.model)
 
     def split_trace(self) -> Tuple[Union[None, "MultiTrace"], Union[None, "MultiTrace"]]:
         """Split MultiTrace object into posterior and warmup.
@@ -262,11 +263,15 @@ class InferenceDataConverter:  # pylint: disable=too-many-instance-attributes
         if self.model is None:
             return None
 
+        # TODO: We no longer need one function per observed variable
         if self.log_likelihood is True:
-            cached = [(var, self.model.fn(logpt(var))) for var in self.model.observed_RVs]
+            cached = [
+                (var, self.model.fn(self.model.logp_elemwiset(var)[0]))
+                for var in self.model.observed_RVs
+            ]
         else:
             cached = [
-                (var, self.model.fn(logpt(var)))
+                (var, self.model.fn(self.model.logp_elemwiset(var)[0]))
                 for var in self.model.observed_RVs
                 if var.name in self.log_likelihood
             ]

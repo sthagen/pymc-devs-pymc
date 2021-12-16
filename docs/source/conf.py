@@ -19,12 +19,10 @@
 import os
 import sys
 
-
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 sys.path.insert(0, os.path.abspath(os.path.join("..", "..")))
-sys.path.insert(0, os.path.abspath("sphinxext"))
 import pymc  # isort:skip
 
 # -- General configuration ------------------------------------------------
@@ -46,12 +44,10 @@ extensions = [
     "IPython.sphinxext.ipython_console_highlighting",
     "IPython.sphinxext.ipython_directive",
     "sphinx.ext.autosectionlabel",
-    "sphinx.ext.napoleon",
-    "gallery_generator",
     "myst_nb",
     "sphinx_design",
-    "sphinx_panels",
     "notfound.extension",
+    "sphinx_copybutton",
 ]
 
 # Don't auto-generate summary for class members.
@@ -112,14 +108,16 @@ notfound_urls_prefix = "/en/latest/"
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
-exclude_patterns = ["_build", "**.ipynb_checkpoints", "pymc-examples/.github"]
+exclude_patterns = [
+    "_build",
+    "**.ipynb_checkpoints",
+    "pymc-examples/.github",
+    "about/featured_testimonials.md",
+]
 
 # myst and panels config
 jupyter_execute_notebooks = "off"
-myst_heading_anchors = 3
-myst_enable_extensions = [
-    "colon_fence",
-]
+myst_enable_extensions = ["colon_fence", "deflist", "dollarmath", "amsmath", "substitution"]
 panels_add_bootstrap_css = False
 
 # The reST default role (used for this markup: `text`) to use for all
@@ -154,6 +152,7 @@ intersphinx_mapping = {
     "arviz": ("https://arviz-devs.github.io/arviz/", None),
     "aesara": ("https://aesara.readthedocs.io/en/latest/", None),
     "numpy": ("https://numpy.org/doc/stable/", None),
+    "nb": ("https://pymc-examples.readthedocs.io/en/latest/", None),
 }
 
 
@@ -180,12 +179,19 @@ html_theme_options = {
             "url": "https://twitter.com/pymc_devs",
             "icon": "fab fa-twitter-square",
         },
+        {
+            "name": "Discourse",
+            "url": "https://discourse.pymc.io",
+            "icon": "fab fa-discourse",
+        },
     ],
     "show_prev_next": False,
+    "navbar_align": "content",
     "navbar_start": ["navbar-logo", "navbar-version"],
     "navbar_end": ["search-field.html", "navbar-icon-links.html"],
     "search_bar_text": "Search...",
     "use_edit_page_button": False,  # TODO: see how to skip of fix for generated pages
+    "externalrefs": True,
     "google_analytics_id": "UA-176578023-1",
 }
 html_context = {
@@ -194,7 +200,13 @@ html_context = {
     "github_version": "main",
     "doc_path": "docs/source/",
 }
-html_sidebars = {"learn": [], "**": ["sidebar-nav-bs.html", "sidebar-ethical-ads.html"]}
+# this controls which sidebar sections are available in which pages. [] removes the left sidebar
+html_sidebars = {
+    "learn": [],
+    "installation": [],
+    "community": ["twitter", "sidebar-nav-bs.html", "sidebar-ethical-ads.html"],
+    "**": ["sidebar-nav-bs.html", "sidebar-ethical-ads.html"],
+}
 
 # Add any paths that contain custom themes here, relative to this directory.
 # html_theme_path = []
@@ -208,7 +220,7 @@ html_sidebars = {"learn": [], "**": ["sidebar-nav-bs.html", "sidebar-ethical-ads
 
 # The name of an image file (relative to this directory) to place at the top
 # of the sidebar.
-html_logo = "../pymc_logo.jpg"
+html_logo = "../logos/PyMC.jpg"
 
 # The name of an image file (within the static path) to use as favicon of the
 # docs.  This file should be a Windows icon file (.ico) being 16x16 or 32x32
@@ -218,7 +230,7 @@ html_favicon = "../logos/PyMC.ico"
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = ["_static", "nb_tutorials/_images", "nb_examples/_images"]
+html_static_path = ["../logos"]
 
 # Add any extra paths that contain custom files (such as robots.txt or
 # .htaccess) here, relative to this directory. These files are copied

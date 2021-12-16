@@ -22,15 +22,15 @@ from functools import singledispatch
 from typing import Callable, Optional, Sequence
 
 import aesara
-import numpy as np
 
+from aeppl.logprob import _logcdf, _logprob
+from aesara import tensor as at
 from aesara.tensor.basic import as_tensor_variable
 from aesara.tensor.random.op import RandomVariable
 from aesara.tensor.random.var import RandomStateSharedVariable
 from aesara.tensor.var import TensorVariable
 
 from pymc.aesaraf import change_rv_size
-from pymc.distributions import _logcdf, _logp
 from pymc.distributions.shape_utils import (
     Dims,
     Shape,
@@ -42,7 +42,6 @@ from pymc.distributions.shape_utils import (
     maybe_resize,
     resize_from_dims,
     resize_from_observed,
-    to_tuple,
 )
 from pymc.printing import str_for_dist
 from pymc.util import UNSET
@@ -77,7 +76,7 @@ class DistributionMeta(ABCMeta):
             def _random(*args, **kwargs):
                 warnings.warn(
                     "The old `Distribution.random` interface is deprecated.",
-                    DeprecationWarning,
+                    FutureWarning,
                     stacklevel=2,
                 )
                 return clsdict["random"](*args, **kwargs)
@@ -98,18 +97,19 @@ class DistributionMeta(ABCMeta):
             class_logp = clsdict.get("logp")
             if class_logp:
 
-                @_logp.register(rv_type)
-                def logp(op, var, rvs_to_values, *dist_params, **kwargs):
-                    value_var = rvs_to_values.get(var, var)
-                    return class_logp(value_var, *dist_params, **kwargs)
+                @_logprob.register(rv_type)
+                def logp(op, values, *dist_params, **kwargs):
+                    dist_params = dist_params[3:]
+                    (value,) = values
+                    return class_logp(value, *dist_params)
 
             class_logcdf = clsdict.get("logcdf")
             if class_logcdf:
 
                 @_logcdf.register(rv_type)
-                def logcdf(op, var, rvs_to_values, *dist_params, **kwargs):
-                    value_var = rvs_to_values.get(var, var)
-                    return class_logcdf(value_var, *dist_params, **kwargs)
+                def logcdf(op, value, *dist_params, **kwargs):
+                    dist_params = dist_params[3:]
+                    return class_logcdf(value, *dist_params)
 
             class_initval = clsdict.get("get_moment")
             if class_initval:
@@ -165,8 +165,10 @@ class Distribution(metaclass=DistributionMeta):
         dims : tuple, optional
             A tuple of dimension names known to the model.
         initval : optional
-            Test value to be attached to the output RV.
-            Must match its shape exactly.
+            Numeric or symbolic untransformed initial value of matching shape,
+            or one of the following initial value strategies: "moment", "prior".
+            Depending on the sampler's settings, a random jitter may be added to numeric, symbolic
+            or moment-based initial values in the transformed space.
         observed : optional
             Observed data to be passed when registering the random variable in the model.
             See ``Model.register_rv``.
@@ -200,7 +202,7 @@ class Distribution(metaclass=DistributionMeta):
             initval = kwargs.pop("testval")
             warnings.warn(
                 "The `testval` argument is deprecated; use `initval`.",
-                DeprecationWarning,
+                FutureWarning,
                 stacklevel=2,
             )
 
@@ -292,7 +294,7 @@ class Distribution(metaclass=DistributionMeta):
                 "The `.dist(testval=...)` argument is deprecated and has no effect. "
                 "Initial values for sampling/optimization can be specified with `initval` in a modelcontext. "
                 "For using Aesara's test value features, you must assign the `.tag.test_value` yourself.",
-                DeprecationWarning,
+                FutureWarning,
                 stacklevel=2,
             )
         if "initval" in kwargs:
@@ -367,7 +369,7 @@ def get_moment(rv: TensorVariable) -> TensorVariable:
     for which the value is to be derived.
     """
     size = rv.owner.inputs[1]
-    return _get_moment(rv.owner.op, rv, size, *rv.owner.inputs[3:])
+    return _get_moment(rv.owner.op, rv, size, *rv.owner.inputs[3:]).astype(rv.dtype)
 
 
 class Discrete(Distribution):
@@ -471,9 +473,9 @@ class DensityDist(NoDistribution):
             as the first argument ``rv``. ``size`` is the random variable's size implied
             by the ``dims``, ``size`` and parameters supplied to the distribution. Finally,
             ``rv_inputs`` is the sequence of the distribution parameters, in the same order
-            as they were supplied when the DensityDist was created. If ``None``, a
-            ``NotImplemented`` error will be raised when trying to draw random samples from
-            the distribution's prior or posterior predictive.
+            as they were supplied when the DensityDist was created. If ``None``, a default
+            ``get_moment`` function will be assigned that will always return 0, or an array
+            of zeros.
         ndim_supp : int
             The number of dimensions in the support of the distribution. Defaults to assuming
             a scalar distribution, i.e. ``ndim_supp = 0``.
@@ -549,11 +551,16 @@ class DensityDist(NoDistribution):
         if logcdf is None:
             logcdf = default_not_implemented(name, "logcdf")
 
+        if get_moment is None:
+            get_moment = functools.partial(
+                default_get_moment,
+                rv_name=name,
+                has_fallback=random is not None,
+                ndim_supp=ndim_supp,
+            )
+
         if random is None:
             random = default_not_implemented(name, "random")
-
-        if get_moment is None:
-            get_moment = default_not_implemented(name, "get_moment")
 
         rv_op = type(
             f"DensityDist_{name}",
@@ -572,13 +579,11 @@ class DensityDist(NoDistribution):
         # Register custom logp
         rv_type = type(rv_op)
 
-        @_logp.register(rv_type)
-        def density_dist_logp(op, rv, rvs_to_values, *dist_params, **kwargs):
-            value_var = rvs_to_values.get(rv, rv)
-            return logp(
-                value_var,
-                *dist_params,
-            )
+        @_logprob.register(rv_type)
+        def density_dist_logp(op, value_var_list, *dist_params, **kwargs):
+            _dist_params = dist_params[3:]
+            value_var = value_var_list[0]
+            return logp(value_var, *_dist_params)
 
         @_logcdf.register(rv_type)
         def density_dist_logcdf(op, var, rvs_to_values, *dist_params, **kwargs):
@@ -600,33 +605,31 @@ class DensityDist(NoDistribution):
         else:
             dtype = cls.rv_op.dtype
         ndim_supp = cls.rv_op.ndim_supp
-        if not hasattr(output.tag, "test_value"):
-            size = to_tuple(kwargs.get("size", None)) + (1,) * ndim_supp
-            output.tag.test_value = np.zeros(size, dtype)
         return output
 
 
 def default_not_implemented(rv_name, method_name):
-    if method_name == "random":
-        # This is a hack to catch the NotImplementedError when creating the RV without random
-        # If the message starts with "Cannot sample from", then it uses the test_value as
-        # the initial_val.
-        message = (
-            f"Cannot sample from the DensityDist '{rv_name}' because the {method_name} "
-            "keyword argument was not provided when the distribution was "
-            f"but this method had not been provided when the distribution was "
-            f"constructed. Please re-build your model and provide a callable "
-            f"to '{rv_name}'s {method_name} keyword argument.\n"
-        )
-    else:
-        message = (
-            f"Attempted to run {method_name} on the DensityDist '{rv_name}', "
-            f"but this method had not been provided when the distribution was "
-            f"constructed. Please re-build your model and provide a callable "
-            f"to '{rv_name}'s {method_name} keyword argument.\n"
-        )
+    message = (
+        f"Attempted to run {method_name} on the DensityDist '{rv_name}', "
+        f"but this method had not been provided when the distribution was "
+        f"constructed. Please re-build your model and provide a callable "
+        f"to '{rv_name}'s {method_name} keyword argument.\n"
+    )
 
     def func(*args, **kwargs):
         raise NotImplementedError(message)
 
     return func
+
+
+def default_get_moment(rv, size, *rv_inputs, rv_name=None, has_fallback=False, ndim_supp=0):
+    if ndim_supp == 0:
+        return at.zeros(size, dtype=rv.dtype)
+    elif has_fallback:
+        return at.zeros_like(rv)
+    else:
+        raise TypeError(
+            "Cannot safely infer the size of a multivariate random variable's moment. "
+            f"Please provide a get_moment function when instantiating the {rv_name} "
+            "random variable."
+        )

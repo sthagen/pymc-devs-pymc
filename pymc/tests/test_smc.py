@@ -32,7 +32,7 @@ import pymc as pm
 from pymc.aesaraf import floatX
 from pymc.backends.base import MultiTrace
 from pymc.smc.smc import IMH
-from pymc.tests.helpers import SeededTest
+from pymc.tests.helpers import SeededTest, assert_random_state_equal
 
 
 class TestSMC(SeededTest):
@@ -77,8 +77,10 @@ class TestSMC(SeededTest):
             y = pm.Normal("y", x, 1, observed=0)
 
     def test_sample(self):
+        initial_rng_state = np.random.get_state()
         with self.SMC_test:
             mtrace = pm.sample_smc(draws=self.samples, return_inferencedata=False)
+        assert_random_state_equal(initial_rng_state, np.random.get_state())
 
         x = mtrace["X"]
         mu1d = np.abs(x).mean(axis=0)
@@ -212,7 +214,7 @@ class TestSMC(SeededTest):
     def test_deprecated_parallel_arg(self):
         with self.fast_model:
             with pytest.warns(
-                DeprecationWarning,
+                FutureWarning,
                 match="The argument parallel is deprecated",
             ):
                 pm.sample_smc(draws=10, chains=1, parallel=False)
@@ -220,25 +222,25 @@ class TestSMC(SeededTest):
     def test_deprecated_abc_args(self):
         with self.fast_model:
             with pytest.warns(
-                DeprecationWarning,
+                FutureWarning,
                 match='The kernel string argument "ABC" in sample_smc has been deprecated',
             ):
                 pm.sample_smc(draws=10, chains=1, kernel="ABC")
 
             with pytest.warns(
-                DeprecationWarning,
+                FutureWarning,
                 match='The kernel string argument "Metropolis" in sample_smc has been deprecated',
             ):
                 pm.sample_smc(draws=10, chains=1, kernel="Metropolis")
 
             with pytest.warns(
-                DeprecationWarning,
+                FutureWarning,
                 match="save_sim_data has been deprecated",
             ):
                 pm.sample_smc(draws=10, chains=1, save_sim_data=True)
 
             with pytest.warns(
-                DeprecationWarning,
+                FutureWarning,
                 match="save_log_pseudolikelihood has been deprecated",
             ):
                 pm.sample_smc(draws=10, chains=1, save_log_pseudolikelihood=True)
@@ -293,8 +295,8 @@ class TestSimulator(SeededTest):
 
         with self.SMABC_test:
             trace = pm.sample_smc(draws=1000, return_inferencedata=False)
-            pr_p = pm.sample_prior_predictive(1000)
-            po_p = pm.sample_posterior_predictive(trace, 1000)
+            pr_p = pm.sample_prior_predictive(1000, return_inferencedata=False)
+            po_p = pm.sample_posterior_predictive(trace, 1000, return_inferencedata=False)
 
         assert abs(self.data.mean() - trace["a"].mean()) < 0.05
         assert abs(self.data.std() - trace["b"].mean()) < 0.05
@@ -406,13 +408,13 @@ class TestSimulator(SeededTest):
         # Check that the logps use the correct methods
         a_val = m.rvs_to_values[a]
         sim1_val = m.rvs_to_values[sim1]
-        logp_sim1 = pm.logp(sim1, sim1_val)
-        logp_sim1_fn = aesara.function([sim1_val, a_val], logp_sim1)
+        logp_sim1 = pm.logpt(sim1, sim1_val)
+        logp_sim1_fn = aesara.function([a_val], logp_sim1)
 
         b_val = m.rvs_to_values[b]
         sim2_val = m.rvs_to_values[sim2]
-        logp_sim2 = pm.logp(sim2, sim2_val)
-        logp_sim2_fn = aesara.function([sim2_val, b_val], logp_sim2)
+        logp_sim2 = pm.logpt(sim2, sim2_val)
+        logp_sim2_fn = aesara.function([b_val], logp_sim2)
 
         assert any(
             node for node in logp_sim1_fn.maker.fgraph.toposort() if isinstance(node.op, SortOp)
@@ -531,11 +533,14 @@ class TestSimulator(SeededTest):
 class TestMHKernel(SeededTest):
     def test_normal_model(self):
         data = st.norm(10, 0.5).rvs(1000, random_state=self.get_random_state())
+
+        initial_rng_state = np.random.get_state()
         with pm.Model() as m:
             mu = pm.Normal("mu", 0, 3)
             sigma = pm.HalfNormal("sigma", 1)
             y = pm.Normal("y", mu, sigma, observed=data)
             idata = pm.sample_smc(draws=2000, kernel=pm.smc.MH)
+        assert_random_state_equal(initial_rng_state, np.random.get_state())
 
         post = idata.posterior.stack(sample=("chain", "draw"))
         assert np.abs(post["mu"].mean() - 10) < 0.1

@@ -13,8 +13,6 @@
 #   limitations under the License.
 
 from pymc.distributions.logprob import (  # isort:skip
-    _logcdf,
-    _logp,
     logcdf,
     logp,
     logp_transform,
@@ -193,9 +191,7 @@ __all__ = [
     "PolyaGamma",
     "logpt",
     "logp",
-    "_logp",
     "logp_transform",
     "logcdf",
-    "_logcdf",
     "logpt_sum",
 ]

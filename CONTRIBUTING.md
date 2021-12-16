@@ -113,7 +113,7 @@ tools:
   $ pytest --cov=pymc pymc/tests/<name of test>.py
   ```
 
-* No `pre-commit` errors: see the [Python code style](https://github.com/pymc-devs/pymc/wiki/PyMC-Python-Code-Style) and [Jupyter Notebook style](https://github.com/pymc-devs/pymc/wiki/PyMC-Jupyter-Notebook-Style-Guide) page from our Wiki on how to install and run it.
+* No `pre-commit` errors: see the [Python code style](https://github.com/pymc-devs/pymc/wiki/Python-Code-Style) and [Jupyter Notebook style](https://github.com/pymc-devs/pymc/wiki/PyMC-Jupyter-Notebook-Style-Guide) page from our Wiki on how to install and run it.
 
 ## Developing in Docker
 
@@ -146,7 +146,7 @@ docker exec -it pymc jupyter notebook list
 ## Style guide
 
 We have configured a pre-commit hook that checks for `black`-compliant code style.
-We encourage you to configure the pre-commit hook as described in the [PyMC Python Code Style Wiki Page](https://github.com/pymc-devs/pymc/wiki/PyMC-Python-Code-Style), because it will automatically enforce the code style on your commits.
+We encourage you to configure the pre-commit hook as described in the [PyMC Python Code Style Wiki Page](https://github.com/pymc-devs/pymc/wiki/Python-Code-Style), because it will automatically enforce the code style on your commits.
 
 Similarly, consult the [PyMC's Jupyter Notebook Style](https://github.com/pymc-devs/pymc/wiki/PyMC-Jupyter-Notebook-Style-Guide) guides for notebooks.
 

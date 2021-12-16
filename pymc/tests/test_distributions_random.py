@@ -13,6 +13,7 @@
 #   limitations under the License.
 import functools
 import itertools
+import re
 
 from typing import Callable, List, Optional
 
@@ -42,10 +43,10 @@ from scipy.special import expit
 import pymc as pm
 
 from pymc.aesaraf import change_rv_size, floatX, intX
-from pymc.distributions import _logp
 from pymc.distributions.continuous import get_tau_sigma, interpolated
 from pymc.distributions.discrete import _OrderedLogistic, _OrderedProbit
 from pymc.distributions.dist_math import clipped_beta_rvs
+from pymc.distributions.logprob import logp
 from pymc.distributions.multivariate import _OrderedMultinomial, quaddist_matrix
 from pymc.distributions.shape_utils import to_tuple
 from pymc.tests.helpers import SeededTest, select_by_precision
@@ -64,13 +65,16 @@ def pymc_random(
     dist,
     paramdomains,
     ref_rand,
-    valuedomain=Domain([0]),
+    valuedomain=None,
     size=10000,
     alpha=0.05,
     fails=10,
     extra_args=None,
     model_args=None,
 ):
+    if valuedomain is None:
+        valuedomain = Domain([0], edges=(None, None))
+
     if model_args is None:
         model_args = {}
 
@@ -104,12 +108,15 @@ def pymc_random(
 def pymc_random_discrete(
     dist,
     paramdomains,
-    valuedomain=Domain([0]),
+    valuedomain=None,
     ref_rand=None,
     size=100000,
     alpha=0.05,
     fails=20,
 ):
+    if valuedomain is None:
+        valuedomain = Domain([0], edges=(None, None))
+
     model, param_vars = build_model(dist, valuedomain, paramdomains)
     model_dist = change_rv_size(model.named_vars["value"], size, expand=True)
     pymc_rand = aesara.function([], model_dist)
@@ -247,18 +254,6 @@ class TestGaussianRandomWalk(BaseTestCases.BaseTestCase):
     distribution = pm.GaussianRandomWalk
     params = {"mu": 1.0, "sigma": 1.0}
     default_shape = (1,)
-
-
-@pytest.mark.xfail(reason="This distribution has not been refactored for v4")
-class TestZeroInflatedNegativeBinomial(BaseTestCases.BaseTestCase):
-    distribution = pm.ZeroInflatedNegativeBinomial
-    params = {"mu": 1.0, "alpha": 1.0, "psi": 0.3}
-
-
-@pytest.mark.xfail(reason="This distribution has not been refactored for v4")
-class TestZeroInflatedBinomial(BaseTestCases.BaseTestCase):
-    distribution = pm.ZeroInflatedBinomial
-    params = {"n": 10, "p": 0.6, "psi": 0.3}
 
 
 class BaseTestDistribution(SeededTest):
@@ -1121,7 +1116,19 @@ class TestMvStudentTCov(BaseTestDistribution):
         "check_pymc_params_match_rv_op",
         "check_pymc_draws_match_reference",
         "check_rv_size",
+        "test_errors",
     ]
+
+    def test_errors(self):
+        msg = "nu must be a scalar (ndim=0)."
+        with pm.Model():
+            with pytest.raises(ValueError, match=re.escape(msg)):
+                mvstudentt = pm.MvStudentT(
+                    "mvstudentt",
+                    nu=np.array([1, 2]),
+                    mu=np.ones(2),
+                    cov=np.full((2, 2), np.ones(2)),
+                )
 
 
 class TestMvStudentTChol(BaseTestDistribution):
@@ -1200,10 +1207,12 @@ class TestDirichletMultinomial(BaseTestDistribution):
     ]
 
     def test_random_draws(self):
+        default_rng = aesara.shared(np.random.default_rng(1234))
         draws = pm.DirichletMultinomial.dist(
             n=np.array([5, 100]),
             a=np.array([[0.001, 0.001, 0.001, 1000], [1000, 1000, 0.001, 0.001]]),
             size=(2, 3),
+            rng=default_rng,
         ).eval()
         assert np.all(draws.sum(-1) == np.array([5, 100]))
         assert np.all((draws.sum(-2)[:, :, 0] > 30) & (draws.sum(-2)[:, :, 0] <= 70))
@@ -1459,7 +1468,7 @@ class TestZeroInflatedBinomial(BaseTestDistribution):
     ]
 
 
-class TestZeroInflatedNegativeBinomial(BaseTestDistribution):
+class TestZeroInflatedNegativeBinomialMuSigma(BaseTestDistribution):
     def zero_inflated_negbinomial_rng_fn(
         self, size, psi, n, p, negbinomial_rng_fct, random_rng_fct
     ):
@@ -1492,6 +1501,14 @@ class TestZeroInflatedNegativeBinomial(BaseTestDistribution):
         "check_pymc_draws_match_reference",
         "check_rv_size",
     ]
+
+
+class TestZeroInflatedNegativeBinomial(BaseTestDistribution):
+    pymc_dist = pm.ZeroInflatedNegativeBinomial
+    pymc_dist_params = {"psi": 0.9, "n": 12, "p": 0.7}
+    expected_rv_op_params = {"psi": 0.9, "n": 12, "p": 0.7}
+    reference_dist_params = {"psi": 0.9, "n": 12, "p": 0.7}
+    tests_to_run = ["check_pymc_params_match_rv_op"]
 
 
 class TestOrderedLogistic(BaseTestDistribution):
@@ -1583,7 +1600,7 @@ class TestMatrixNormal(BaseTestDistribution):
                 rowcov=np.eye(3),
                 colcov=np.eye(3),
             )
-            check = pm.sample_prior_predictive(n_fails)
+            check = pm.sample_prior_predictive(n_fails, return_inferencedata=False)
 
         ref_smp = ref_rand(mu=np.random.random((3, 3)), rowcov=np.eye(3), colcov=np.eye(3))
 
@@ -1615,7 +1632,6 @@ class TestMatrixNormal(BaseTestDistribution):
                     size=15,
                 )
 
-        msg = "Value must be two dimensional."
         with pm.Model():
             matrixnormal = pm.MatrixNormal(
                 "matnormal",
@@ -1623,17 +1639,11 @@ class TestMatrixNormal(BaseTestDistribution):
                 rowcov=np.eye(3),
                 colcov=np.eye(3),
             )
-            with pytest.raises(ValueError, match=msg):
-                rvs_to_values = {matrixnormal: aesara.tensor.ones((3, 3, 3))}
-                _logp(
-                    matrixnormal.owner.op,
-                    matrixnormal,
-                    rvs_to_values,
-                    *matrixnormal.owner.inputs[3:],
-                )
+            with pytest.raises(ValueError):
+                logp(matrixnormal, aesara.tensor.ones((3, 3, 3)))
 
         with pm.Model():
-            with pytest.warns(DeprecationWarning):
+            with pytest.warns(FutureWarning):
                 matrixnormal = pm.MatrixNormal(
                     "matnormal",
                     mu=np.random.random((3, 3)),
@@ -1859,10 +1869,11 @@ class TestDensityDist:
             pm.DensityDist(
                 "density_dist",
                 mu,
-                logp=lambda value, mu: pm.Normal.logp(value, mu, 1),
+                logp=lambda value, mu: logp(pm.Normal.dist(mu, 1, size=100), value),
                 observed=np.random.randn(100),
+                initval=0,
             )
-            idata = pm.sample(100, cores=1)
+            idata = pm.sample(tune=50, draws=100, cores=1, step=pm.Metropolis())
 
         samples = 500
         with pytest.raises(NotImplementedError):
@@ -1921,7 +1932,7 @@ class TestNestedRandom(SeededTest):
             nested_rvs_info,
         )
         with model:
-            return pm.sample_prior_predictive(prior_samples)
+            return pm.sample_prior_predictive(prior_samples, return_inferencedata=False)
 
     @pytest.mark.parametrize(
         ["prior_samples", "shape", "mu", "alpha"],
@@ -2379,7 +2390,7 @@ def test_car_rng_fn(sparse):
     with pm.Model(rng_seeder=1):
         car = pm.CAR("car", mu, W, alpha, tau, size=size)
         mn = pm.MvNormal("mn", mu, cov, size=size)
-        check = pm.sample_prior_predictive(n_fails)
+        check = pm.sample_prior_predictive(n_fails, return_inferencedata=False)
 
     p, f = delta, n_fails
     while p <= delta and f > 0:

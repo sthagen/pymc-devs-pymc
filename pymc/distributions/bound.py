@@ -12,6 +12,7 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
+import aesara.tensor as at
 import numpy as np
 
 from aesara.tensor import as_tensor_variable
@@ -19,10 +20,10 @@ from aesara.tensor.random.op import RandomVariable
 from aesara.tensor.var import TensorVariable
 
 from pymc.aesaraf import floatX, intX
-from pymc.distributions import _logp
 from pymc.distributions.continuous import BoundedContinuous
-from pymc.distributions.dist_math import bound
+from pymc.distributions.dist_math import check_parameters
 from pymc.distributions.distribution import Continuous, Discrete
+from pymc.distributions.logprob import logp
 from pymc.distributions.shape_utils import to_tuple
 from pymc.model import modelcontext
 
@@ -46,7 +47,7 @@ boundrv = BoundRV()
 
 class _ContinuousBounded(BoundedContinuous):
     rv_op = boundrv
-    bound_args_indices = [1, 2]
+    bound_args_indices = [4, 5]
 
     def logp(value, distribution, lower, upper):
         """
@@ -67,8 +68,17 @@ class _ContinuousBounded(BoundedContinuous):
         -------
         TensorVariable
         """
-        logp = _logp(distribution.owner.op, value, {}, *distribution.owner.inputs[3:])
-        return bound(logp, (value >= lower), (value <= upper))
+        res = at.switch(
+            at.or_(at.lt(value, lower), at.gt(value, upper)),
+            -np.inf,
+            logp(distribution, value),
+        )
+
+        return check_parameters(
+            res,
+            lower <= upper,
+            msg="lower <= upper",
+        )
 
 
 class DiscreteBoundRV(BoundRV):
@@ -107,8 +117,17 @@ class _DiscreteBounded(Discrete):
         -------
         TensorVariable
         """
-        logp = _logp(distribution.owner.op, value, {}, *distribution.owner.inputs[3:])
-        return bound(logp, (value >= lower), (value <= upper))
+        res = at.switch(
+            at.or_(at.lt(value, lower), at.gt(value, upper)),
+            -np.inf,
+            logp(distribution, value),
+        )
+
+        return check_parameters(
+            res,
+            lower <= upper,
+            msg="lower <= upper",
+        )
 
 
 class Bound:
@@ -166,6 +185,7 @@ class Bound:
                 raise ValueError("Given dims do not exist in model coordinates.")
 
         lower, upper, initval = cls._set_values(lower, upper, size, shape, initval)
+        distribution.tag.ignore_logprob = True
 
         if isinstance(distribution.owner.op, Continuous):
             res = _ContinuousBounded(
@@ -200,7 +220,7 @@ class Bound:
 
         cls._argument_checks(distribution, **kwargs)
         lower, upper, initval = cls._set_values(lower, upper, size, shape, initval=None)
-
+        distribution.tag.ignore_logprob = True
         if isinstance(distribution.owner.op, Continuous):
             res = _ContinuousBounded.dist(
                 [distribution, lower, upper],

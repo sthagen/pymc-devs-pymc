@@ -12,11 +12,14 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
+import aesara.tensor as at
 import numpy as np
 
+from aeppl.logprob import _logprob
 from aesara.tensor.random.op import RandomVariable, default_shape_from_params
+from pandas import DataFrame, Series
 
-from pymc.distributions.distribution import NoDistribution
+from pymc.distributions.distribution import NoDistribution, _get_moment
 
 __all__ = ["BART"]
 
@@ -38,35 +41,7 @@ class BARTRV(RandomVariable):
 
     @classmethod
     def rng_fn(cls, rng=np.random.default_rng(), *args, **kwargs):
-        size = kwargs.pop("size", None)
-        X_new = kwargs.pop("X_new", None)
-        all_trees = cls.all_trees
-        if all_trees:
-
-            if size is None:
-                size = ()
-            elif isinstance(size, int):
-                size = [size]
-
-            flatten_size = 1
-            for s in size:
-                flatten_size *= s
-
-            idx = rng.randint(len(all_trees), size=flatten_size)
-
-            if X_new is None:
-                pred = np.zeros((flatten_size, all_trees[0][0].num_observations))
-                for ind, p in enumerate(pred):
-                    for tree in all_trees[idx[ind]]:
-                        p += tree.predict_output()
-            else:
-                pred = np.zeros((flatten_size, X_new.shape[0]))
-                for ind, p in enumerate(pred):
-                    for tree in all_trees[idx[ind]]:
-                        p += np.array([tree.predict_out_of_sample(x, cls.m) for x in X_new])
-            return pred.reshape((*size, -1))
-        else:
-            return np.full_like(cls.Y, cls.Y.mean())
+        return np.full_like(cls.Y, cls.Y.mean())
 
 
 bart = BARTRV()
@@ -92,9 +67,6 @@ class BART(NoDistribution):
     k : float
         Scale parameter for the values of the leaf nodes. Defaults to 2. Recomended to be between 1
         and 3.
-    response : str
-        How the leaf_node values are computed. Available options are ``constant``, ``linear`` or
-        ``mix`` (default).
     split_prior : array-like
         Each element of split_prior should be in the [0, 1] interval and the elements should sum to
         1. Otherwise they will be normalized.
@@ -109,19 +81,17 @@ class BART(NoDistribution):
         m=50,
         alpha=0.25,
         k=2,
-        response="mix",
         split_prior=None,
         **kwargs,
     ):
 
-        cls.all_trees = []
+        X, Y = preprocess_XY(X, Y)
 
         bart_op = type(
             f"BART_{name}",
             (BARTRV,),
             dict(
                 name="BART",
-                all_trees=cls.all_trees,
                 inplace=False,
                 initval=Y.mean(),
                 X=X,
@@ -129,12 +99,15 @@ class BART(NoDistribution):
                 m=m,
                 alpha=alpha,
                 k=k,
-                response=response,
                 split_prior=split_prior,
             ),
         )()
 
         NoDistribution.register(BARTRV)
+
+        @_get_moment.register(BARTRV)
+        def get_moment(rv, size, *rv_inputs):
+            return cls.get_moment(rv, size, *rv_inputs)
 
         cls.rv_op = bart_op
         params = [X, Y, m, alpha, k]
@@ -143,3 +116,40 @@ class BART(NoDistribution):
     @classmethod
     def dist(cls, *params, **kwargs):
         return super().dist(params, **kwargs)
+
+    def logp(x, *inputs):
+        """Calculate log probability.
+
+        Parameters
+        ----------
+        x: numeric, TensorVariable
+            Value for which log-probability is calculated.
+
+        Returns
+        -------
+        TensorVariable
+        """
+        return at.zeros_like(x)
+
+    @classmethod
+    def get_moment(cls, rv, size, *rv_inputs):
+        mean = at.fill(size, rv.Y.mean())
+        return mean
+
+
+def preprocess_XY(X, Y):
+    if isinstance(Y, (Series, DataFrame)):
+        Y = Y.to_numpy()
+    if isinstance(X, (Series, DataFrame)):
+        X = X.to_numpy()
+        # X = np.random.normal(X, X.std(0)/100)
+    Y = Y.astype(float)
+    X = X.astype(float)
+    return X, Y
+
+
+@_logprob.register(BARTRV)
+def logp(op, value_var, *dist_params, **kwargs):
+    _dist_params = dist_params[3:]
+    value_var = value_var[0]
+    return BART.logp(value_var, *_dist_params)

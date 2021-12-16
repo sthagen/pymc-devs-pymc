@@ -17,9 +17,7 @@ import numpy as np
 import pytest
 import scipy.stats.distributions as sp
 
-from aesara.gradient import DisconnectedGrad
-from aesara.graph.basic import Constant, ancestors, graph_inputs
-from aesara.graph.fg import FunctionGraph
+from aesara.graph.basic import ancestors
 from aesara.tensor.random.op import RandomVariable
 from aesara.tensor.subtensor import (
     AdvancedIncSubtensor,
@@ -31,10 +29,10 @@ from aesara.tensor.subtensor import (
 )
 
 from pymc.aesaraf import floatX, walk_model
-from pymc.distributions.continuous import Normal, Uniform
+from pymc.distributions.continuous import HalfFlat, Normal, TruncatedNormal, Uniform
 from pymc.distributions.discrete import Bernoulli
 from pymc.distributions.logprob import logcdf, logp, logpt
-from pymc.model import Model
+from pymc.model import Model, Potential
 from pymc.tests.helpers import select_by_precision
 
 
@@ -60,7 +58,7 @@ def test_logpt_basic():
 
     c_value_var = m.rvs_to_values[c]
 
-    b_logp = logpt(b, b_value_var)
+    b_logp = logpt(b, b_value_var, sum=False)
 
     res_ancestors = list(walk_model((b_logp,), walk_past_rvs=True))
     res_rv_ancestors = [
@@ -89,9 +87,12 @@ def test_logpt_incsubtensor(indices, size):
     mu = floatX(np.power(10, np.arange(np.prod(size)))).reshape(size)
     data = mu[indices]
     sigma = 0.001
-    rng = aesara.shared(np.random.RandomState(232), borrow=True)
+    rng = np.random.RandomState(232)
+    a_val = rng.normal(mu, sigma, size=size).astype(aesara.config.floatX)
 
+    rng = aesara.shared(rng, borrow=False)
     a = Normal.dist(mu, sigma, size=size, rng=rng)
+    a_value_var = a.type()
     a.name = "a"
 
     a_idx = at.set_subtensor(a[indices], data)
@@ -101,46 +102,18 @@ def test_logpt_incsubtensor(indices, size):
     a_idx_value_var = a_idx.type()
     a_idx_value_var.name = "a_idx_value"
 
-    a_idx_logp = logpt(a_idx, a_idx_value_var)
+    a_idx_logp = logpt(a_idx, {a_idx: a_value_var}, sum=False)
 
-    logp_vals = a_idx_logp.eval()
+    logp_vals = a_idx_logp.eval({a_value_var: a_val})
 
     # The indices that were set should all have the same log-likelihood values,
     # because the values they were set to correspond to the unique means along
     # that dimension.  This helps us confirm that the log-likelihood is
     # associating the assigned values with their correct parameters.
-    exp_obs_logps = sp.norm.logpdf(mu, mu, sigma)[indices]
-    np.testing.assert_almost_equal(logp_vals[indices], exp_obs_logps)
-
-    # Next, we need to confirm that the unset indices are being sampled
-    # from the original random variable in the correct locations.
-    # rng.get_value(borrow=True).seed(232)
-
-    res_ancestors = list(walk_model((a_idx_logp,), walk_past_rvs=True))
-    res_rv_ancestors = tuple(
-        v for v in res_ancestors if v.owner and isinstance(v.owner.op, RandomVariable)
-    )
-
-    # The imputed missing values are drawn from the original distribution
-    (a_new,) = res_rv_ancestors
-    assert a_new is not a
-    assert a_new.owner.op == a.owner.op
-
-    fg = FunctionGraph(
-        [v for v in graph_inputs((a_idx_logp,)) if not isinstance(v, Constant)],
-        [a_idx_logp],
-        clone=False,
-    )
-
-    ((a_client, _),) = fg.clients[a_new]
-    # The imputed values should be treated as constants when gradients are
-    # taken
-    assert isinstance(a_client.op, DisconnectedGrad)
-
-    ((a_client, _),) = fg.clients[a_client.outputs[0]]
-    assert isinstance(a_client.op, (IncSubtensor, AdvancedIncSubtensor, AdvancedIncSubtensor1))
-    indices = tuple(i.eval() for i in a_client.inputs[2:])
-    np.testing.assert_almost_equal(indices, indices)
+    a_val_idx = a_val.copy()
+    a_val_idx[indices] = data
+    exp_obs_logps = sp.norm.logpdf(a_val_idx, mu, sigma)
+    np.testing.assert_almost_equal(logp_vals, exp_obs_logps)
 
 
 def test_logpt_subtensor():
@@ -171,7 +144,8 @@ def test_logpt_subtensor():
     I_value_var = I_rv.type()
     I_value_var.name = "I_value"
 
-    A_idx_logp = logpt(A_idx, {A_idx: A_idx_value_var, I_rv: I_value_var})
+    A_idx_logps = logpt(A_idx, {A_idx: A_idx_value_var, I_rv: I_value_var}, sum=False)
+    A_idx_logp = at.add(*A_idx_logps)
 
     logp_vals_fn = aesara.function([A_idx_value_var, I_value_var], A_idx_logp)
 
@@ -197,7 +171,7 @@ def test_logpt_subtensor():
 
 def test_logp_helper():
     value = at.vector("value")
-    x = Normal.dist(0, 1, size=2)
+    x = Normal.dist(0, 1)
 
     x_logp = logp(x, value)
     np.testing.assert_almost_equal(x_logp.eval({value: [0, 1]}), sp.norm(0, 1).logpdf([0, 1]))
@@ -208,10 +182,38 @@ def test_logp_helper():
 
 def test_logcdf_helper():
     value = at.vector("value")
-    x = Normal.dist(0, 1, size=2)
+    x = Normal.dist(0, 1)
 
-    x_logp = logcdf(x, value)
-    np.testing.assert_almost_equal(x_logp.eval({value: [0, 1]}), sp.norm(0, 1).logcdf([0, 1]))
+    x_logcdf = logcdf(x, value)
+    np.testing.assert_almost_equal(x_logcdf.eval({value: [0, 1]}), sp.norm(0, 1).logcdf([0, 1]))
 
-    x_logp = logcdf(x, [0, 1])
-    np.testing.assert_almost_equal(x_logp.eval(), sp.norm(0, 1).logcdf([0, 1]))
+    x_logcdf = logcdf(x, [0, 1])
+    np.testing.assert_almost_equal(x_logcdf.eval(), sp.norm(0, 1).logcdf([0, 1]))
+
+
+def test_logcdf_transformed_argument():
+    with Model() as m:
+        sigma = HalfFlat("sigma")
+        x = Normal("x", 0, sigma)
+        Potential("norm_term", -logcdf(x, 1.0))
+
+    sigma_value_log = -1.0
+    sigma_value = np.exp(sigma_value_log)
+    x_value = 0.5
+
+    observed = m.logp_nojac({"sigma_log__": sigma_value_log, "x": x_value})
+    expected = logp(TruncatedNormal.dist(0, sigma_value, lower=None, upper=1.0), x_value).eval()
+    assert np.isclose(observed, expected)
+
+
+def test_model_unchanged_logprob_access():
+    # Issue #5007
+    with Model() as model:
+        a = Normal("a")
+        c = Uniform("c", lower=a - 1, upper=1)
+
+    original_inputs = set(aesara.graph.graph_inputs([c]))
+    # Extract model.logpt
+    model.logpt
+    new_inputs = set(aesara.graph.graph_inputs([c]))
+    assert original_inputs == new_inputs

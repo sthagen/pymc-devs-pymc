@@ -1,4 +1,4 @@
-exclude: ^(docs/logos|pymc3/tests/data)/
+exclude: ^(docs/logos|pymc/tests/data)/
 repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
   rev: v4.0.1
@@ -14,30 +14,30 @@ repos:
         exclude: ^requirements-dev\.txt$
     -   id: trailing-whitespace
 - repo: https://github.com/PyCQA/isort
-  rev: 5.9.3
+  rev: 5.10.1
   hooks:
     - id: isort
       name: isort
 - repo: https://github.com/asottile/pyupgrade
-  rev: v2.29.0
+  rev: v2.29.1
   hooks:
     - id: pyupgrade
       args: [--py37-plus]
 - repo: https://github.com/psf/black
-  rev: 21.9b0
+  rev: 21.12b0
   hooks:
     - id: black
 - repo: https://github.com/PyCQA/pylint
-  rev: v2.11.1
+  rev: v2.12.2
   hooks:
     - id: pylint
       args: [--rcfile=.pylintrc]
-      files: ^pymc3/
+      files: ^pymc/
 - repo: https://github.com/MarcoGorelli/madforhooks
   rev: 0.2.1
   hooks:
     - id: no-print-statements
-      files: ^pymc3/
+      files: ^pymc/
     - id: conda-env-sorter
       files: ^conda-envs/environment-dev-py.+\.yml$
 - repo: local
@@ -52,7 +52,7 @@ repos:
     - id: pip-from-conda
       additional_dependencies: [pyyaml]
       entry: python scripts/generate_pip_deps_from_conda.py
-      files: ^conda-envs/
+      files: ^conda-envs/environment-dev-py.+.yml$
       language: python
       name: Generate pip dependency from conda
     - id: no-relative-imports

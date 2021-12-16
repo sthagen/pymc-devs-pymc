@@ -33,7 +33,7 @@ from pymc.aesaraf import floatX, intX, take_along_axis
 from pymc.distributions.dist_math import (
     betaln,
     binomln,
-    bound,
+    check_parameters,
     factln,
     log_diff_normal_cdf,
     logpow,
@@ -41,7 +41,8 @@ from pymc.distributions.dist_math import (
     normal_lcdf,
 )
 from pymc.distributions.distribution import Discrete
-from pymc.distributions.logprob import _logcdf, _logp
+from pymc.distributions.logprob import logcdf, logp
+from pymc.distributions.shape_utils import rv_size_is_none
 from pymc.math import sigmoid
 
 __all__ = [
@@ -112,8 +113,13 @@ class Binomial(Discrete):
     def dist(cls, n, p, *args, **kwargs):
         n = at.as_tensor_variable(intX(n))
         p = at.as_tensor_variable(floatX(p))
-        # mode = at.cast(tround(n * p), self.dtype)
         return super().dist([n, p], **kwargs)
+
+    def get_moment(rv, size, n, p):
+        mean = at.round(n * p)
+        if not rv_size_is_none(size):
+            mean = at.full(size, mean)
+        return mean
 
     def logp(value, n, p):
         r"""
@@ -129,13 +135,14 @@ class Binomial(Discrete):
         -------
         TensorVariable
         """
-        return bound(
+
+        res = at.switch(
+            at.or_(at.lt(value, 0), at.gt(value, n)),
+            -np.inf,
             binomln(n, value) + logpow(p, value) + logpow(1 - p, n - value),
-            0 <= value,
-            value <= n,
-            0 <= p,
-            p <= 1,
         )
+
+        return check_parameters(res, 0 < n, 0 <= p, p <= 1, msg="n > 0, 0 <= p <= 1")
 
     def logcdf(value, n, p):
         """
@@ -154,16 +161,22 @@ class Binomial(Discrete):
         """
         value = at.floor(value)
 
-        return bound(
+        res = at.switch(
+            at.lt(value, 0),
+            -np.inf,
             at.switch(
                 at.lt(value, n),
                 at.log(at.betainc(n - value, value + 1, 1 - p)),
                 0,
             ),
-            0 <= value,
+        )
+
+        return check_parameters(
+            res,
             0 < n,
             0 <= p,
             p <= 1,
+            msg="n > 0, 0 <= p <= 1",
         )
 
 
@@ -232,6 +245,12 @@ class BetaBinomial(Discrete):
         n = at.as_tensor_variable(intX(n))
         return super().dist([n, alpha, beta], **kwargs)
 
+    def get_moment(rv, size, n, alpha, beta):
+        mean = at.round((n * alpha) / (alpha + beta))
+        if not rv_size_is_none(size):
+            mean = at.full(size, mean)
+        return mean
+
     def logp(value, n, alpha, beta):
         r"""
         Calculate log-probability of BetaBinomial distribution at specified value.
@@ -246,13 +265,12 @@ class BetaBinomial(Discrete):
         -------
         TensorVariable
         """
-        return bound(
+        res = at.switch(
+            at.or_(at.lt(value, 0), at.gt(value, n)),
+            -np.inf,
             binomln(n, value) + betaln(value + alpha, n - value + beta) - betaln(alpha, beta),
-            value >= 0,
-            value <= n,
-            alpha > 0,
-            beta > 0,
         )
+        return check_parameters(res, n >= 0, alpha > 0, beta > 0, msg="n >= 0, alpha > 0, beta > 0")
 
     def logcdf(value, n, alpha, beta):
         """
@@ -275,21 +293,22 @@ class BetaBinomial(Discrete):
             )
 
         safe_lower = at.switch(at.lt(value, 0), value, 0)
-
-        return bound(
+        res = at.switch(
+            at.lt(value, 0),
+            -np.inf,
             at.switch(
                 at.lt(value, n),
                 at.logsumexp(
-                    BetaBinomial.logp(at.arange(safe_lower, value + 1), n, alpha, beta),
+                    logp(
+                        BetaBinomial.dist(alpha=alpha, beta=beta, n=n),
+                        at.arange(safe_lower, value + 1),
+                    ),
                     keepdims=False,
                 ),
                 0,
             ),
-            0 <= value,
-            0 <= n,
-            0 < alpha,
-            0 < beta,
         )
+        return check_parameters(res, 0 <= n, 0 < alpha, 0 < beta, msg="n >= 0, alpha > 0, beta > 0")
 
 
 class Bernoulli(Discrete):
@@ -351,6 +370,11 @@ class Bernoulli(Discrete):
         p = at.as_tensor_variable(floatX(p))
         return super().dist([p], **kwargs)
 
+    def get_moment(rv, size, p):
+        if not rv_size_is_none(size):
+            p = at.full(size, p)
+        return at.switch(p < 0.5, 0, 1)
+
     def logp(value, p):
         r"""
         Calculate log-probability of Bernoulli distribution at specified value.
@@ -366,13 +390,13 @@ class Bernoulli(Discrete):
         TensorVariable
         """
 
-        return bound(
+        res = at.switch(
+            at.or_(at.lt(value, 0), at.gt(value, 1)),
+            -np.inf,
             at.switch(value, at.log(p), at.log1p(-p)),
-            value >= 0,
-            value <= 1,
-            p >= 0,
-            p <= 1,
         )
+
+        return check_parameters(res, p >= 0, p <= 1, msg="0 <= p <= 1")
 
     def logcdf(value, p):
         """
@@ -389,24 +413,16 @@ class Bernoulli(Discrete):
         -------
         TensorVariable
         """
-
-        return bound(
+        res = at.switch(
+            at.lt(value, 0),
+            -np.inf,
             at.switch(
                 at.lt(value, 1),
                 at.log1p(-p),
                 0,
             ),
-            0 <= value,
-            0 <= p,
-            p <= 1,
         )
-
-    def get_moment(value, size, p):
-        p = at.full(size, p)
-        return at.switch(p < 0.5, at.zeros_like(value), at.ones_like(value))
-
-    def _distr_parameters_for_repr(self):
-        return ["p"]
+        return check_parameters(res, 0 <= p, p <= 1, msg="0 <= p <= 1")
 
 
 class DiscreteWeibullRV(RandomVariable):
@@ -486,13 +502,14 @@ class DiscreteWeibull(Discrete):
         -------
         TensorVariable
         """
-        return bound(
+
+        res = at.switch(
+            at.lt(value, 0),
+            -np.inf,
             at.log(at.power(q, at.power(value, beta)) - at.power(q, at.power(value + 1, beta))),
-            0 <= value,
-            0 < q,
-            q < 1,
-            0 < beta,
         )
+
+        return check_parameters(res, 0 < q, q < 1, 0 < beta, msg="0 < q < 1, beta > 0")
 
     def logcdf(value, q, beta):
         """
@@ -509,13 +526,13 @@ class DiscreteWeibull(Discrete):
         -------
         TensorVariable
         """
-        return bound(
+
+        res = at.switch(
+            at.lt(value, 0),
+            -np.inf,
             at.log1p(-at.power(q, at.power(value + 1, beta))),
-            0 <= value,
-            0 < q,
-            q < 1,
-            0 < beta,
         )
+        return check_parameters(res, 0 < q, q < 1, 0 < beta, msg="0 < q < 1, beta > 0")
 
 
 class Poisson(Discrete):
@@ -567,8 +584,13 @@ class Poisson(Discrete):
     @classmethod
     def dist(cls, mu, *args, **kwargs):
         mu = at.as_tensor_variable(floatX(mu))
-        # mode = intX(at.floor(mu))
         return super().dist([mu], *args, **kwargs)
+
+    def get_moment(rv, size, mu):
+        mu = at.floor(mu)
+        if not rv_size_is_none(size):
+            mu = at.full(size, mu)
+        return mu
 
     def logp(value, mu):
         r"""
@@ -584,7 +606,12 @@ class Poisson(Discrete):
         -------
         TensorVariable
         """
-        log_prob = bound(logpow(mu, value) - factln(value) - mu, mu >= 0, value >= 0)
+        res = at.switch(
+            at.lt(value, 0),
+            -np.inf,
+            logpow(mu, value) - factln(value) - mu,
+        )
+        log_prob = check_parameters(res, mu >= 0, msg="mu >= 0")
         # Return zero when mu and value are both zero
         return at.switch(at.eq(mu, 0) * at.eq(value, 0), 0, log_prob)
 
@@ -608,11 +635,15 @@ class Poisson(Discrete):
         safe_mu = at.switch(at.lt(mu, 0), 0, mu)
         safe_value = at.switch(at.lt(value, 0), 0, value)
 
-        return bound(
-            at.log(at.gammaincc(safe_value + 1, safe_mu)),
-            0 <= value,
-            0 <= mu,
+        res = (
+            at.switch(
+                at.lt(value, 0),
+                -np.inf,
+                at.log(at.gammaincc(safe_value + 1, safe_mu)),
+            ),
         )
+
+        return check_parameters(res, 0 <= mu, msg="mu >= 0")
 
 
 class NegativeBinomial(Discrete):
@@ -706,6 +737,12 @@ class NegativeBinomial(Discrete):
 
         return n, p
 
+    def get_moment(rv, size, n, p):
+        mu = at.floor(n * (1 - p) / p)
+        if not rv_size_is_none(size):
+            mu = at.full(size, mu)
+        return mu
+
     def logp(value, n, p):
         r"""
         Calculate log-probability of NegativeBinomial distribution at specified value.
@@ -722,17 +759,26 @@ class NegativeBinomial(Discrete):
         """
         alpha = n
         mu = alpha * (1 - p) / p
-        negbinom = bound(
-            binomln(value + alpha - 1, value)
-            + logpow(mu / (mu + alpha), value)
-            + logpow(alpha / (mu + alpha), alpha),
-            value >= 0,
+
+        res = at.switch(
+            at.lt(value, 0),
+            -np.inf,
+            (
+                binomln(value + alpha - 1, value)
+                + logpow(mu / (mu + alpha), value)
+                + logpow(alpha / (mu + alpha), alpha)
+            ),
+        )
+
+        negbinom = check_parameters(
+            res,
             mu > 0,
             alpha > 0,
+            msg="mu > 0, alpha > 0",
         )
 
         # Return Poisson when alpha gets very large.
-        return at.switch(at.gt(alpha, 1e10), Poisson.logp(value, mu), negbinom)
+        return at.switch(at.gt(alpha, 1e10), logp(Poisson.dist(mu=mu), value), negbinom)
 
     def logcdf(value, n, p):
         """
@@ -749,12 +795,17 @@ class NegativeBinomial(Discrete):
         -------
         TensorVariable
         """
-        return bound(
+        res = at.switch(
+            at.lt(value, 0),
+            -np.inf,
             at.log(at.betainc(n, at.floor(value) + 1, p)),
-            0 <= value,
+        )
+        return check_parameters(
+            res,
             0 < n,
             0 <= p,
             p <= 1,
+            msg="0 < n, 0 <= p <= 1",
         )
 
 
@@ -803,6 +854,12 @@ class Geometric(Discrete):
         p = at.as_tensor_variable(floatX(p))
         return super().dist([p], *args, **kwargs)
 
+    def get_moment(rv, size, p):
+        mean = at.round(1.0 / p)
+        if not rv_size_is_none(size):
+            mean = at.full(size, mean)
+        return mean
+
     def logp(value, p):
         r"""
         Calculate log-probability of Geometric distribution at specified value.
@@ -817,11 +874,18 @@ class Geometric(Discrete):
         -------
         TensorVariable
         """
-        return bound(
+
+        res = at.switch(
+            at.lt(value, 1),
+            -np.inf,
             at.log(p) + logpow(1 - p, value - 1),
+        )
+
+        return check_parameters(
+            res,
             0 <= p,
             p <= 1,
-            value >= 1,
+            msg="0 <= p <= 1",
         )
 
     def logcdf(value, p):
@@ -840,11 +904,16 @@ class Geometric(Discrete):
         TensorVariable
         """
 
-        return bound(
+        res = at.switch(
+            at.lt(value, 0),
+            -np.inf,
             at.log1mexp(at.log1p(-p) * value),
-            0 <= value,
+        )
+        return check_parameters(
+            res,
             0 <= p,
             p <= 1,
+            msg="0 <= p <= 1",
         )
 
 
@@ -904,6 +973,13 @@ class HyperGeometric(Discrete):
         n = at.as_tensor_variable(intX(n))
         return super().dist([good, bad, n], *args, **kwargs)
 
+    def get_moment(rv, size, good, bad, n):
+        N, k = good + bad, good
+        mode = at.floor((n + 1) * (k + 1) / (N + 2))
+        if not rv_size_is_none(size):
+            mode = at.full(size, mode)
+        return mode
+
     def logp(value, good, bad, n):
         r"""
         Calculate log-probability of HyperGeometric distribution at specified value.
@@ -931,7 +1007,18 @@ class HyperGeometric(Discrete):
         # value in [max(0, n - N + k), min(k, n)]
         lower = at.switch(at.gt(n - tot + good, 0), n - tot + good, 0)
         upper = at.switch(at.lt(good, n), good, n)
-        return bound(result, lower <= value, value <= upper)
+
+        res = at.switch(
+            at.lt(value, lower),
+            -np.inf,
+            at.switch(
+                at.le(value, upper),
+                result,
+                -np.inf,
+            ),
+        )
+
+        return check_parameters(res, lower <= upper, msg="lower <= upper")
 
     def logcdf(value, good, bad, n):
         """
@@ -957,7 +1044,9 @@ class HyperGeometric(Discrete):
         # TODO: Use lower upper in locgdf for smarter logsumexp?
         safe_lower = at.switch(at.lt(value, 0), value, 0)
 
-        return bound(
+        res = at.switch(
+            at.lt(value, 0),
+            -np.inf,
             at.switch(
                 at.lt(value, n),
                 at.logsumexp(
@@ -966,12 +1055,16 @@ class HyperGeometric(Discrete):
                 ),
                 0,
             ),
-            0 <= value,
+        )
+
+        return check_parameters(
+            res,
             0 < N,
             0 <= good,
             0 <= n,
             good <= N,
             n <= N,
+            msg="N > 0, 0 <= good <= N, 0 <= n <= N",
         )
 
 
@@ -1038,6 +1131,12 @@ class DiscreteUniform(Discrete):
         upper = intX(at.floor(upper))
         return super().dist([lower, upper], **kwargs)
 
+    def get_moment(rv, size, lower, upper):
+        mode = at.maximum(at.floor((upper + lower) / 2.0), lower)
+        if not rv_size_is_none(size):
+            mode = at.full(size, mode)
+        return mode
+
     def logp(value, lower, upper):
         r"""
         Calculate log-probability of DiscreteUniform distribution at specified value.
@@ -1052,11 +1151,12 @@ class DiscreteUniform(Discrete):
         -------
         TensorVariable
         """
-        return bound(
+        res = at.switch(
+            at.or_(at.lt(value, lower), at.gt(value, upper)),
+            -np.inf,
             at.fill(value, -at.log(upper - lower + 1)),
-            lower <= value,
-            value <= upper,
         )
+        return check_parameters(res, lower <= upper, msg="lower <= upper")
 
     def logcdf(value, lower, upper):
         """
@@ -1074,15 +1174,17 @@ class DiscreteUniform(Discrete):
         TensorVariable
         """
 
-        return bound(
+        res = at.switch(
+            at.le(value, lower),
+            -np.inf,
             at.switch(
                 at.lt(value, upper),
                 at.log(at.minimum(at.floor(value), upper) - lower + 1) - at.log(upper - lower + 1),
                 0,
             ),
-            lower <= value,
-            lower <= upper,
         )
+
+        return check_parameters(res, lower <= upper, msg="lower <= upper")
 
 
 class Categorical(Discrete):
@@ -1126,12 +1228,13 @@ class Categorical(Discrete):
     def dist(cls, p, **kwargs):
 
         p = at.as_tensor_variable(floatX(p))
-
-        # mode = at.argmax(p, axis=-1)
-        # if mode.ndim == 1:
-        #     mode = at.squeeze(mode)
-
         return super().dist([p], **kwargs)
+
+    def get_moment(rv, size, p):
+        mode = at.argmax(p, axis=-1)
+        if not rv_size_is_none(size):
+            mode = at.full(size, mode)
+        return mode
 
     def logp(value, p):
         r"""
@@ -1164,12 +1267,14 @@ class Categorical(Discrete):
         else:
             a = at.log(p[value_clip])
 
-        return bound(
+        res = at.switch(
+            at.or_(at.lt(value, 0), at.gt(value, k - 1)),
+            -np.inf,
             a,
-            value >= 0,
-            value <= (k - 1),
-            at.all(p_ >= 0, axis=-1),
-            at.all(p <= 1, axis=-1),
+        )
+
+        return check_parameters(
+            res, at.all(p_ >= 0, axis=-1), at.all(p <= 1, axis=-1), msg="0 <= p <=1"
         )
 
 
@@ -1207,6 +1312,11 @@ class Constant(Discrete):
         c = at.as_tensor_variable(floatX(c))
         return super().dist([c], **kwargs)
 
+    def get_moment(rv, size, c):
+        if not rv_size_is_none(size):
+            c = at.full(size, c)
+        return c
+
     def logp(value, c):
         r"""
         Calculate log-probability of Constant distribution at specified value.
@@ -1221,9 +1331,10 @@ class Constant(Discrete):
         -------
         TensorVariable
         """
-        return bound(
-            at.zeros_like(value),
+        return at.switch(
             at.eq(value, c),
+            at.zeros_like(value),
+            -np.inf,
         )
 
 
@@ -1301,6 +1412,12 @@ class ZeroInflatedPoisson(Discrete):
         theta = at.as_tensor_variable(floatX(theta))
         return super().dist([psi, theta], *args, **kwargs)
 
+    def get_moment(rv, size, psi, theta):
+        mean = at.floor(psi * theta)
+        if not rv_size_is_none(size):
+            mean = at.full(size, mean)
+        return mean
+
     def logp(value, psi, theta):
         r"""
         Calculate log-probability of ZeroInflatedPoisson distribution at specified value.
@@ -1316,18 +1433,20 @@ class ZeroInflatedPoisson(Discrete):
         TensorVariable
         """
 
-        logp_val = at.switch(
+        res = at.switch(
             at.gt(value, 0),
-            at.log(psi) + _logp(poisson, value, {}, theta),
+            at.log(psi) + logp(Poisson.dist(mu=theta), value),
             at.logaddexp(at.log1p(-psi), at.log(psi) - theta),
         )
 
-        return bound(
-            logp_val,
-            0 <= value,
+        res = at.switch(at.lt(value, 0), -np.inf, res)
+
+        return check_parameters(
+            res,
             0 <= psi,
             psi <= 1,
             0 <= theta,
+            msg="0 <= psi <= 1, theta >= 0",
         )
 
     def logcdf(value, psi, theta):
@@ -1346,15 +1465,17 @@ class ZeroInflatedPoisson(Discrete):
         TensorVariable
         """
 
-        return bound(
+        res = at.switch(
+            at.lt(value, 0),
+            -np.inf,
             at.logaddexp(
                 at.log1p(-psi),
-                at.log(psi) + _logcdf(poisson, value, {}, theta),
+                at.log(psi) + logcdf(Poisson.dist(mu=theta), value),
             ),
-            0 <= value,
-            0 <= psi,
-            psi <= 1,
-            0 <= theta,
+        )
+
+        return check_parameters(
+            res, 0 <= psi, psi <= 1, 0 <= theta, msg="0 <= psi <= 1, theta >= 0"
         )
 
 
@@ -1410,7 +1531,7 @@ class ZeroInflatedBinomial(Discrete):
 
     ========  ==========================
     Support   :math:`x \in \mathbb{N}_0`
-    Mean      :math:`(1 - \psi) n p`
+    Mean      :math:`\psi n p`
     Variance  :math:`(1-\psi) n p [1 - p(1 - \psi n)].`
     ========  ==========================
 
@@ -1434,6 +1555,12 @@ class ZeroInflatedBinomial(Discrete):
         p = at.as_tensor_variable(floatX(p))
         return super().dist([psi, n, p], *args, **kwargs)
 
+    def get_moment(rv, size, psi, n, p):
+        mean = at.round(psi * n * p)
+        if not rv_size_is_none(size):
+            mean = at.full(size, mean)
+        return mean
+
     def logp(value, psi, n, p):
         r"""
         Calculate log-probability of ZeroInflatedBinomial distribution at specified value.
@@ -1449,20 +1576,25 @@ class ZeroInflatedBinomial(Discrete):
         TensorVariable
         """
 
-        logp_val = at.switch(
+        res = at.switch(
             at.gt(value, 0),
-            at.log(psi) + _logp(binomial, value, {}, n, p),
+            at.log(psi) + logp(Binomial.dist(n=n, p=p), value),
             at.logaddexp(at.log1p(-psi), at.log(psi) + n * at.log1p(-p)),
         )
 
-        return bound(
-            logp_val,
-            0 <= value,
-            value <= n,
+        res = at.switch(
+            at.lt(value, 0),
+            -np.inf,
+            res,
+        )
+
+        return check_parameters(
+            res,
             0 <= psi,
             psi <= 1,
             0 <= p,
             p <= 1,
+            msg="0 <= psi <= 1, 0 <= p <= 1",
         )
 
     def logcdf(value, psi, n, p):
@@ -1480,18 +1612,22 @@ class ZeroInflatedBinomial(Discrete):
         -------
         TensorVariable
         """
-
-        return bound(
+        res = at.switch(
+            at.or_(at.lt(value, 0), at.gt(value, n)),
+            -np.inf,
             at.logaddexp(
                 at.log1p(-psi),
-                at.log(psi) + _logcdf(binomial, value, {}, n, p),
+                at.log(psi) + logcdf(Binomial.dist(n=n, p=p), value),
             ),
-            0 <= value,
-            value <= n,
+        )
+
+        return check_parameters(
+            res,
             0 <= psi,
             psi <= 1,
             0 <= p,
             p <= 1,
+            msg="0 <= psi <= 1, 0 <= p <= 1",
         )
 
 
@@ -1571,6 +1707,15 @@ class ZeroInflatedNegativeBinomial(Discrete):
     Var       :math:`\psi\mu +  \left (1 + \frac{\mu}{\alpha} + \frac{1-\psi}{\mu} \right)`
     ========  ==========================
 
+    The zero inflated negative binomial distribution can be parametrized
+    either in terms of mu or p, and either in terms of alpha or n.
+    The link between the parametrizations is given by
+
+    .. math::
+
+        \mu &= \frac{n(1-p)}{p} \\
+        \alpha &= n
+
     Parameters
     ----------
     psi: float
@@ -1579,18 +1724,27 @@ class ZeroInflatedNegativeBinomial(Discrete):
         Poission distribution parameter (mu > 0).
     alpha: float
         Gamma distribution parameter (alpha > 0).
-
+    p: float
+        Alternative probability of success in each trial (0 < p < 1).
+    n: float
+        Alternative number of target success trials (n > 0)
     """
 
     rv_op = zero_inflated_neg_binomial
 
     @classmethod
-    def dist(cls, psi, mu, alpha, *args, **kwargs):
+    def dist(cls, psi, mu=None, alpha=None, p=None, n=None, *args, **kwargs):
         psi = at.as_tensor_variable(floatX(psi))
-        n, p = NegativeBinomial.get_n_p(mu=mu, alpha=alpha)
+        n, p = NegativeBinomial.get_n_p(mu=mu, alpha=alpha, p=p, n=n)
         n = at.as_tensor_variable(floatX(n))
         p = at.as_tensor_variable(floatX(p))
         return super().dist([psi, n, p], *args, **kwargs)
+
+    def get_moment(rv, size, psi, n, p):
+        mean = at.floor(psi * n * (1 - p) / p)
+        if not rv_size_is_none(size):
+            mean = at.full(size, mean)
+        return mean
 
     def logp(value, psi, n, p):
         r"""
@@ -1607,18 +1761,26 @@ class ZeroInflatedNegativeBinomial(Discrete):
         TensorVariable
         """
 
-        return bound(
-            at.switch(
-                at.gt(value, 0),
-                at.log(psi) + _logp(nbinom, value, {}, n, p),
-                at.logaddexp(at.log1p(-psi), at.log(psi) + n * at.log(p)),
-            ),
-            0 <= value,
+        res = at.switch(
+            at.gt(value, 0),
+            at.log(psi) + logp(NegativeBinomial.dist(n=n, p=p), value),
+            at.logaddexp(at.log1p(-psi), at.log(psi) + n * at.log(p)),
+        )
+
+        res = at.switch(
+            at.lt(value, 0),
+            -np.inf,
+            res,
+        )
+
+        return check_parameters(
+            res,
             0 <= psi,
             psi <= 1,
             0 < n,
             0 <= p,
             p <= 1,
+            msg="0 <= psi <= 1, n > 0, 0 <= p <= 1",
         )
 
     def logcdf(value, psi, n, p):
@@ -1636,13 +1798,23 @@ class ZeroInflatedNegativeBinomial(Discrete):
         -------
         TensorVariable
         """
-        return bound(
-            at.logaddexp(at.log1p(-psi), at.log(psi) + _logcdf(nbinom, value, {}, n, p)),
-            0 <= value,
+        res = at.switch(
+            at.lt(value, 0),
+            -np.inf,
+            at.logaddexp(
+                at.log1p(-psi),
+                at.log(psi) + logcdf(NegativeBinomial.dist(n=n, p=p), value),
+            ),
+        )
+
+        return check_parameters(
+            res,
             0 <= psi,
             psi <= 1,
+            0 < n,
             0 < p,
             p <= 1,
+            msg="0 <= psi <= 1, n > 0, 0 < p <= 1",
         )
 
 
@@ -1745,7 +1917,7 @@ class OrderedLogistic:
     def __new__(cls, name, *args, compute_p=True, **kwargs):
         out_rv = _OrderedLogistic(name, *args, **kwargs)
         if compute_p:
-            pm.Deterministic(f"{name}_probs", out_rv.owner.inputs[3])
+            pm.Deterministic(f"{name}_probs", out_rv.owner.inputs[3], dims=kwargs.get("dims"))
         return out_rv
 
     @classmethod
@@ -1761,16 +1933,16 @@ class _OrderedProbit(Categorical):
     rv_op = categorical
 
     @classmethod
-    def dist(cls, eta, cutpoints, *args, **kwargs):
+    def dist(cls, eta, cutpoints, sigma=1, *args, **kwargs):
         eta = at.as_tensor_variable(floatX(eta))
         cutpoints = at.as_tensor_variable(cutpoints)
 
         probits = at.shape_padright(eta) - cutpoints
         _log_p = at.concatenate(
             [
-                at.shape_padright(normal_lccdf(0, 1, probits[..., 0])),
-                log_diff_normal_cdf(0, 1, probits[..., :-1], probits[..., 1:]),
-                at.shape_padright(normal_lcdf(0, 1, probits[..., -1])),
+                at.shape_padright(normal_lccdf(0, sigma, probits[..., 0])),
+                log_diff_normal_cdf(0, sigma, probits[..., :-1], probits[..., 1:]),
+                at.shape_padright(normal_lcdf(0, sigma, probits[..., -1])),
             ],
             axis=-1,
         )
@@ -1816,12 +1988,12 @@ class OrderedProbit:
         The length K - 1 array of cutpoints which break :math:`\eta` into
         ranges. Do not explicitly set the first and last elements of
         :math:`c` to negative and positive infinity.
+    sigma: float, default 1.0
+         Standard deviation of the probit function.
     compute_p: boolean, default True
         Whether to compute and store in the trace the inferred probabilities of each categories,
         based on the cutpoints' values. Defaults to True.
         Might be useful to disable it if memory usage is of interest.
-    sigma: float
-         The standard deviation of probit function.
     Example
     --------
     .. code:: python
@@ -1856,7 +2028,7 @@ class OrderedProbit:
     def __new__(cls, name, *args, compute_p=True, **kwargs):
         out_rv = _OrderedProbit(name, *args, **kwargs)
         if compute_p:
-            pm.Deterministic(f"{name}_probs", out_rv.owner.inputs[3])
+            pm.Deterministic(f"{name}_probs", out_rv.owner.inputs[3], dims=kwargs.get("dims"))
         return out_rv
 
     @classmethod

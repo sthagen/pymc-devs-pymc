@@ -23,7 +23,8 @@ import pandas as pd
 import pytest
 import scipy.sparse as sps
 
-from aesara.graph.basic import Constant, Variable, ancestors
+from aeppl.logprob import ParameterValueError
+from aesara.graph.basic import Constant, Variable, ancestors, equal_computations
 from aesara.tensor.random.basic import normal, uniform
 from aesara.tensor.random.op import RandomVariable
 from aesara.tensor.subtensor import AdvancedIncSubtensor, AdvancedIncSubtensor1
@@ -35,12 +36,14 @@ import pymc as pm
 from pymc.aesaraf import (
     _conversion_map,
     change_rv_size,
+    compile_pymc,
     extract_obs_data,
     pandas_to_array,
     rvs_to_value_vars,
     take_along_axis,
     walk_model,
 )
+from pymc.distributions.dist_math import check_parameters
 from pymc.exceptions import ShapeError
 from pymc.vartypes import int_types
 
@@ -529,3 +532,45 @@ def test_rvs_to_value_vars():
     assert a_value_var in res_ancestors
     assert b_value_var in res_ancestors
     assert c_value_var in res_ancestors
+
+
+def test_rvs_to_value_vars_nested():
+    # Test that calling rvs_to_value_vars in models with nested transformations
+    # does not change the original rvs in place. See issue #5172
+    with pm.Model() as m:
+        one = pm.LogNormal("one", mu=0)
+        two = pm.LogNormal("two", mu=at.log(one))
+
+        # We add potentials or deterministics that are not in topological order
+        pm.Potential("two_pot", two)
+        pm.Potential("one_pot", one)
+
+        before = aesara.clone_replace(m.free_RVs)
+
+        # This call would change the model free_RVs in place in #5172
+        res, _ = rvs_to_value_vars(m.potentials, apply_transforms=True)
+
+        after = aesara.clone_replace(m.free_RVs)
+
+        assert equal_computations(before, after)
+
+
+def test_check_bounds_flag():
+    """Test that CheckParameterValue Ops are replaced or removed when using compile_pymc"""
+    logp = at.ones(3)
+    cond = np.array([1, 0, 1])
+    bound = check_parameters(logp, cond)
+
+    with pm.Model() as m:
+        pass
+
+    with pytest.raises(ParameterValueError):
+        aesara.function([], bound)()
+
+    m.check_bounds = False
+    with m:
+        assert np.all(compile_pymc([], bound)() == 1)
+
+    m.check_bounds = True
+    with m:
+        assert np.all(compile_pymc([], bound)() == -np.inf)
