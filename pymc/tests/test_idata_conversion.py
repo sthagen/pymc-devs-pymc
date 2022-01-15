@@ -255,7 +255,7 @@ class TestDataPyMC:
             )
 
             data_dims = ("date", "city")
-            data = pm.Data("data", df_data, dims=data_dims)
+            data = pm.ConstantData("data", df_data, dims=data_dims)
             _ = pm.Normal("likelihood", mu=city_temperature, sd=0.5, observed=data, dims=data_dims)
 
             trace = pm.sample(
@@ -281,14 +281,14 @@ class TestDataPyMC:
         np.testing.assert_array_equal(idata.observed_data.coords["city"], coords["city"])
 
     def test_ovewrite_model_coords_dims(self):
-        """Check coords and dims from model object can be partially overwrited."""
+        """Check coords and dims from model object can be partially overwritten."""
         dim1 = ["a", "b"]
         new_dim1 = ["c", "d"]
         coords = {"dim1": dim1, "dim2": ["c1", "c2"]}
         x_data = np.arange(4).reshape((2, 2))
         y = x_data + np.random.normal(size=(2, 2))
         with pm.Model(coords=coords):
-            x = pm.Data("x", x_data, dims=("dim1", "dim2"))
+            x = pm.ConstantData("x", x_data, dims=("dim1", "dim2"))
             beta = pm.Normal("beta", 0, 1, dims="dim1")
             _ = pm.Normal("obs", x * beta, 1, observed=y, dims=("dim1", "dim2"))
             trace = pm.sample(100, tune=100, return_inferencedata=False)
@@ -388,63 +388,6 @@ class TestDataPyMC:
         fails = check_multiple_attrs(test_dict, inference_data)
         assert not fails
 
-    @pytest.mark.xfail(reason="MultiObservedRV is no longer used in v4")
-    def test_multiple_observed_rv_without_observations(self):
-        with pm.Model():
-            mu = pm.Normal("mu")
-            x = pm.DensityDist(  # pylint: disable=unused-variable
-                "x", mu, logp=lambda value, mu: pm.Normal.logp(value, mu, 1), observed=0.1
-            )
-            inference_data = pm.sample(100, chains=2, return_inferencedata=True)
-        test_dict = {
-            "posterior": ["mu"],
-            "sample_stats": ["lp"],
-            "log_likelihood": ["x"],
-            "observed_data": ["value", "~x"],
-        }
-        fails = check_multiple_attrs(test_dict, inference_data)
-        assert not fails
-        assert inference_data.observed_data.value.dtype.kind == "f"
-
-    @pytest.mark.xfail(reason="MultiObservedRV is no longer used in v4")
-    @pytest.mark.parametrize("multiobs", (True, False))
-    def test_multiobservedrv_to_observed_data(self, multiobs):
-        # fake regression data, with weights (W)
-        np.random.seed(2019)
-        N = 100
-        X = np.random.uniform(size=N)
-        W = 1 + np.random.poisson(size=N)
-        a, b = 5, 17
-        Y = a + np.random.normal(b * X)
-
-        with pm.Model():
-            a = pm.Normal("a", 0, 10)
-            b = pm.Normal("b", 0, 10)
-            mu = a + b * X
-            sigma = pm.HalfNormal("sigma", 1)
-            w = W
-
-            def weighted_normal(value, mu, sigma, w):
-                return w * pm.Normal.logp(value, mu, sigma)
-
-            y_logp = pm.DensityDist(  # pylint: disable=unused-variable
-                "y_logp", mu, sigma, w, logp=weighted_normal, observed=Y, size=N
-            )
-            idata = pm.sample(
-                20, tune=20, return_inferencedata=True, idata_kwargs={"density_dist_obs": multiobs}
-            )
-        multiobs_str = "" if multiobs else "~"
-        test_dict = {
-            "posterior": ["a", "b", "sigma"],
-            "sample_stats": ["lp"],
-            "log_likelihood": ["y_logp"],
-            f"{multiobs_str}observed_data": ["y", "w"],
-        }
-        fails = check_multiple_attrs(test_dict, idata)
-        assert not fails
-        if multiobs:
-            assert idata.observed_data.y.dtype.kind == "f"
-
     def test_single_observation(self):
         with pm.Model():
             p = pm.Uniform("p", 0, 1)
@@ -466,8 +409,8 @@ class TestDataPyMC:
     def test_constant_data(self, use_context):
         """Test constant_data group behaviour."""
         with pm.Model() as model:
-            x = pm.Data("x", [1.0, 2.0, 3.0])
-            y = pm.Data("y", [1.0, 2.0, 3.0])
+            x = pm.ConstantData("x", [1.0, 2.0, 3.0])
+            y = pm.MutableData("y", [1.0, 2.0, 3.0])
             beta = pm.Normal("beta", 0, 1)
             obs = pm.Normal("obs", x * beta, 1, observed=y)  # pylint: disable=unused-variable
             trace = pm.sample(100, chains=2, tune=100, return_inferencedata=False)
@@ -483,8 +426,8 @@ class TestDataPyMC:
 
     def test_predictions_constant_data(self):
         with pm.Model():
-            x = pm.Data("x", [1.0, 2.0, 3.0])
-            y = pm.Data("y", [1.0, 2.0, 3.0])
+            x = pm.ConstantData("x", [1.0, 2.0, 3.0])
+            y = pm.MutableData("y", [1.0, 2.0, 3.0])
             beta = pm.Normal("beta", 0, 1)
             obs = pm.Normal("obs", x * beta, 1, observed=y)  # pylint: disable=unused-variable
             trace = pm.sample(100, tune=100, return_inferencedata=False)
@@ -495,8 +438,8 @@ class TestDataPyMC:
         assert not fails
 
         with pm.Model():
-            x = pm.Data("x", [1.0, 2.0])
-            y = pm.Data("y", [1.0, 2.0])
+            x = pm.MutableData("x", [1.0, 2.0])
+            y = pm.ConstantData("y", [1.0, 2.0])
             beta = pm.Normal("beta", 0, 1)
             obs = pm.Normal("obs", x * beta, 1, observed=y)  # pylint: disable=unused-variable
             predictive_trace = pm.sample_posterior_predictive(
@@ -519,8 +462,8 @@ class TestDataPyMC:
 
     def test_no_trace(self):
         with pm.Model() as model:
-            x = pm.Data("x", [1.0, 2.0, 3.0])
-            y = pm.Data("y", [1.0, 2.0, 3.0])
+            x = pm.ConstantData("x", [1.0, 2.0, 3.0])
+            y = pm.MutableData("y", [1.0, 2.0, 3.0])
             beta = pm.Normal("beta", 0, 1)
             obs = pm.Normal("obs", x * beta, 1, observed=y)  # pylint: disable=unused-variable
             idata = pm.sample(100, tune=100)
@@ -553,8 +496,8 @@ class TestDataPyMC:
     def test_priors_separation(self, use_context):
         """Test model is enough to get prior, prior predictive and observed_data."""
         with pm.Model() as model:
-            x = pm.Data("x", [1.0, 2.0, 3.0])
-            y = pm.Data("y", [1.0, 2.0, 3.0])
+            x = pm.MutableData("x", [1.0, 2.0, 3.0])
+            y = pm.ConstantData("y", [1.0, 2.0, 3.0])
             beta = pm.Normal("beta", 0, 1)
             obs = pm.Normal("obs", x * beta, 1, observed=y)  # pylint: disable=unused-variable
             prior = pm.sample_prior_predictive(return_inferencedata=False)
@@ -571,6 +514,17 @@ class TestDataPyMC:
             inference_data = to_inference_data(prior=prior, model=model)
         fails = check_multiple_attrs(test_dict, inference_data)
         assert not fails
+
+    def test_conversion_from_variables_subset(self):
+        """This is a regression test for issue #5337."""
+        with pm.Model() as model:
+            x = pm.Normal("x")
+            pm.Normal("y", x, observed=5)
+            idata = pm.sample(
+                tune=10, draws=20, chains=1, step=pm.Metropolis(), compute_convergence_checks=False
+            )
+            pm.sample_posterior_predictive(idata, var_names=["x"])
+            pm.sample_prior_predictive(var_names=["x"])
 
     def test_multivariate_observations(self):
         coords = {"direction": ["x", "y", "z"], "experiment": np.arange(20)}
