@@ -81,6 +81,7 @@ from pymc.distributions.distribution import (
     Discrete,
     Distribution,
     NoDistribution,
+    SymbolicDistribution,
 )
 from pymc.distributions.mixture import Mixture, MixtureSameFamily, NormalMixture
 from pymc.distributions.multivariate import (
@@ -95,6 +96,7 @@ from pymc.distributions.multivariate import (
     MvNormal,
     MvStudentT,
     OrderedMultinomial,
+    StickBreakingWeights,
     Wishart,
     WishartBartlett,
 )
@@ -151,6 +153,7 @@ __all__ = [
     "OrderedProbit",
     "DensityDist",
     "Distribution",
+    "SymbolicDistribution",
     "Continuous",
     "Discrete",
     "NoDistribution",
@@ -159,6 +162,7 @@ __all__ = [
     "KroneckerNormal",
     "MvStudentT",
     "Dirichlet",
+    "StickBreakingWeights",
     "Multinomial",
     "DirichletMultinomial",
     "OrderedMultinomial",

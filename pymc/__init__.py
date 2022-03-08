@@ -13,7 +13,7 @@
 #   limitations under the License.
 
 # pylint: disable=wildcard-import
-__version__ = "4.0.0b2"
+__version__ = "4.0.0b3"
 
 import logging
 import multiprocessing as mp
@@ -33,15 +33,25 @@ def __set_compiler_flags():
     import aesara
 
     current = aesara.config.gcc__cxxflags
-    aesara.config.gcc__cxxflags = f"{current} -Wno-c++11-narrowing"
+    augmented = f"{current} -Wno-c++11-narrowing"
+
+    # Work around compiler bug in GCC < 8.4 related to structured exception
+    # handling registers on Windows.
+    # See https://gcc.gnu.org/bugzilla/show_bug.cgi?id=65782 for details.
+    # First disable C++ exception handling altogether since it's not needed
+    # for the C extensions that we generate.
+    augmented = f"{augmented} -fno-exceptions"
+    # Now disable the generation of stack unwinding tables.
+    augmented = f"{augmented} -fno-unwind-tables -fno-asynchronous-unwind-tables"
+
+    aesara.config.gcc__cxxflags = augmented
 
 
 __set_compiler_flags()
 
 from pymc import gp, ode, sampling
 from pymc.aesaraf import *
-from pymc.backends import predictions_to_inference_data, to_inference_data
-from pymc.backends.tracetab import *
+from pymc.backends import *
 from pymc.bart import *
 from pymc.blocking import *
 from pymc.data import *

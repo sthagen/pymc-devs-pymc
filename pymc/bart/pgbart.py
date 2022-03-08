@@ -14,7 +14,7 @@
 
 import logging
 
-from copy import copy
+from copy import copy, deepcopy
 
 import aesara
 import numpy as np
@@ -39,18 +39,18 @@ class PGBART(ArrayStepShared):
     vars: list
         List of value variables for sampler
     num_particles : int
-        Number of particles for the conditional SMC sampler. Defaults to 40
+        Number of particles. Defaults to 40
     max_stages : int
-        Maximum number of iterations of the conditional SMC sampler. Defaults to 100.
+        Maximum number of iterations. Defaults to 100.
     batch : int or tuple
         Number of trees fitted per step. Defaults to  "auto", which is the 10% of the `m` trees
-        during tuning and after tuning. If a tuple is passed the first element is the batch size
+        during and after tuning. If a tuple is passed the first element is the batch size
         during tuning and the second the batch size after tuning.
     model: PyMC Model
         Optional model for sampling step. Defaults to None (taken from context).
     """
 
-    name = "bartsampler"
+    name = "pgbart"
     default_blocked = False
     generates_stats = True
     stats_dtypes = [{"variable_inclusion": np.ndarray, "bart_trees": np.ndarray}]
@@ -58,8 +58,13 @@ class PGBART(ArrayStepShared):
     def __init__(self, vars=None, num_particles=40, max_stages=100, batch="auto", model=None):
         _log.warning("BART is experimental. Use with caution.")
         model = modelcontext(model)
-        initial_values = model.recompute_initial_point()
-        value_bart = inputvars(vars)[0]
+        initial_values = model.compute_initial_point()
+        if vars is None:
+            vars = model.value_vars
+        else:
+            vars = [model.rvs_to_values.get(var, var) for var in vars]
+            vars = inputvars(vars)
+        value_bart = vars[0]
         self.bart = model.values_to_rvs[value_bart].owner.op
 
         self.X = self.bart.X
@@ -76,10 +81,10 @@ class PGBART(ArrayStepShared):
         # if data is binary
         Y_unique = np.unique(self.Y)
         if Y_unique.size == 2 and np.all(Y_unique == [0, 1]):
-            self.mu_std = 6 / (self.k * self.m ** 0.5)
+            self.mu_std = 3 / (self.k * self.m**0.5)
         # maybe we need to check for count data
         else:
-            self.mu_std = (2 * self.Y.std()) / (self.k * self.m ** 0.5)
+            self.mu_std = self.Y.std() / (self.k * self.m**0.5)
 
         self.num_observations = self.X.shape[0]
         self.num_variates = self.X.shape[1]
@@ -200,7 +205,7 @@ class PGBART(ArrayStepShared):
                 for index in new_particle.used_variates:
                     variable_inclusion[index] += 1
 
-        stats = {"variable_inclusion": variable_inclusion, "bart_trees": self.all_trees}
+        stats = {"variable_inclusion": variable_inclusion, "bart_trees": copy(self.all_trees)}
         return self.sum_trees, [stats]
 
     def normalize(self, particles):
@@ -224,8 +229,7 @@ class PGBART(ArrayStepShared):
         Initialize particles
         """
         p = self.all_particles[tree_id]
-        particles = [p]
-        particles.append(copy(p))
+        particles = [p, p.copy()]
 
         for _ in self.indices:
             particles.append(ParticleTree(self.a_tree))
@@ -269,6 +273,9 @@ class ParticleTree:
         self.log_weight = 0
         self.old_likelihood_logp = 0
         self.used_variates = []
+
+    def copy(self):
+        return deepcopy(self)
 
     def sample_tree(
         self,
@@ -354,7 +361,7 @@ def compute_prior_probability(alpha):
     prior_leaf_prob = [0]
     depth = 1
     while prior_leaf_prob[-1] < 1:
-        prior_leaf_prob.append(1 - alpha ** depth)
+        prior_leaf_prob.append(1 - alpha**depth)
         depth += 1
     return prior_leaf_prob
 

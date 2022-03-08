@@ -96,7 +96,7 @@ class TestGenerator:
 
     def test_cloning_available(self):
         gop = generator(integers())
-        res = gop ** 2
+        res = gop**2
         shared = aesara.shared(floatX(10))
         res1 = aesara.clone_replace(res, {gop: shared})
         f = aesara.function([], res1)
@@ -144,7 +144,7 @@ class TestGenerator:
         res, _ = aesara.scan(lambda x: x.sum(), X, n_steps=X.shape[0])
         assert res.eval().shape == (50,)
         shared = aesara.shared(datagen.data.astype(gen.dtype))
-        res2 = aesara.clone_replace(res, {gen: shared ** 2})
+        res2 = aesara.clone_replace(res, {gen: shared**2})
         assert res2.eval().shape == (1000,)
 
 
@@ -317,25 +317,22 @@ class TestMinibatch:
         mb = pm.Minibatch(self.data, [(10, 42), (4, 42)])
         assert mb.eval().shape == (10, 4, 40, 10, 50)
 
-    def test_special1(self):
-        mb = pm.Minibatch(self.data, [(10, 42), None, (4, 42)])
-        assert mb.eval().shape == (10, 10, 4, 10, 50)
-
-    def test_special2(self):
-        mb = pm.Minibatch(self.data, [(10, 42), Ellipsis, (4, 42)])
-        assert mb.eval().shape == (10, 10, 40, 10, 4)
-
-    def test_special3(self):
-        mb = pm.Minibatch(self.data, [(10, 42), None, Ellipsis, (4, 42)])
-        assert mb.eval().shape == (10, 10, 40, 10, 4)
-
-    def test_special4(self):
-        mb = pm.Minibatch(self.data, [10, None, Ellipsis, (4, 42)])
-        assert mb.eval().shape == (10, 10, 40, 10, 4)
+    @pytest.mark.parametrize(
+        "batch_size, expected",
+        [
+            ([(10, 42), None, (4, 42)], (10, 10, 4, 10, 50)),
+            ([(10, 42), Ellipsis, (4, 42)], (10, 10, 40, 10, 4)),
+            ([(10, 42), None, Ellipsis, (4, 42)], (10, 10, 40, 10, 4)),
+            ([10, None, Ellipsis, (4, 42)], (10, 10, 40, 10, 4)),
+        ],
+    )
+    def test_special_batch_size(self, batch_size, expected):
+        mb = pm.Minibatch(self.data, batch_size)
+        assert mb.eval().shape == expected
 
     def test_cloning_available(self):
         gop = pm.Minibatch(np.arange(100), 1)
-        res = gop ** 2
+        res = gop**2
         shared = aesara.shared(np.array([10]))
         res1 = aesara.clone_replace(res, {gop: shared})
         f = aesara.function([], res1)

@@ -4,6 +4,14 @@ on:
   pull_request:
   push:
     branches: [main]
+    paths:
+      - ".github/workflows/*"
+      - "pymc/**"
+      - "setup.py"
+      - "pyproject.toml"
+      - "buildosx"
+      - "conda-envs/**"
+      - "codecov.yml"
 
 
 # Tests are split into multiple jobs to accelerate the CI.
@@ -30,7 +38,6 @@ jobs:
         # → pytest will run only these files
           - |
             --ignore=pymc/tests/test_distributions_timeseries.py
-            --ignore=pymc/tests/test_initial_point.py
             --ignore=pymc/tests/test_mixture.py
             --ignore=pymc/tests/test_model_graph.py
             --ignore=pymc/tests/test_modelcontext.py
@@ -41,7 +48,6 @@ jobs:
             --ignore=pymc/tests/test_step.py
             --ignore=pymc/tests/test_tuning.py
             --ignore=pymc/tests/test_transforms.py
-            --ignore=pymc/tests/test_variational_inference.py
             --ignore=pymc/tests/test_sampling_jax.py
             --ignore=pymc/tests/test_dist_math.py
             --ignore=pymc/tests/test_minibatches.py
@@ -56,9 +62,11 @@ jobs:
             --ignore=pymc/tests/test_distributions.py
             --ignore=pymc/tests/test_distributions_random.py
             --ignore=pymc/tests/test_idata_conversion.py
+            --ignore=pymc/tests/test_smc.py
+            --ignore=pymc/tests/test_bart.py
+            --ignore=pymc/tests/test_missing.py
 
           - |
-            pymc/tests/test_initial_point.py
             pymc/tests/test_distributions.py
 
           - |
@@ -68,12 +76,15 @@ jobs:
             pymc/tests/test_pickling.py
             pymc/tests/test_updates.py
             pymc/tests/test_transforms.py
+            pymc/tests/test_smc.py
+            pymc/tests/test_bart.py
 
           - |
             pymc/tests/test_parallel_sampling.py
             pymc/tests/test_sampling.py
             pymc/tests/test_tuning.py
             pymc/tests/test_posteriors.py
+            pymc/tests/test_step.py
 
           - |
             pymc/tests/test_idata_conversion.py
@@ -87,7 +98,7 @@ jobs:
             pymc/tests/test_profile.py
             pymc/tests/test_quadpotential.py
             pymc/tests/test_shape_handling.py
-            pymc/tests/test_step.py
+            pymc/tests/test_missing.py
 
       fail-fast: false
     runs-on: ${{ matrix.os }}
@@ -122,9 +133,13 @@ jobs:
             hashFiles('requirements.txt') }}
       - uses: conda-incubator/setup-miniconda@v2
         with:
+          miniforge-variant: Mambaforge
+          miniforge-version: latest
+          mamba-version: "*"
           activate-environment: pymc-test-py37
           channel-priority: strict
           environment-file: conda-envs/environment-test-py37.yml
+          use-mamba: true
           use-only-tar-bz2: true # IMPORTANT: This needs to be set for caching to work properly!
       - name: Install-pymc
         run: |
@@ -153,6 +168,7 @@ jobs:
             pymc/tests/test_distributions_random.py
             pymc/tests/test_distributions_moments.py
             pymc/tests/test_distributions_timeseries.py
+            pymc/tests/test_variational_inference.py
           - |
             pymc/tests/test_parallel_sampling.py
             pymc/tests/test_sampling.py
@@ -202,9 +218,13 @@ jobs:
             hashFiles('requirements.txt') }}
       - uses: conda-incubator/setup-miniconda@v2
         with:
+          miniforge-variant: Mambaforge
+          miniforge-version: latest
+          mamba-version: "*"
           activate-environment: pymc-test-py38
           channel-priority: strict
           environment-file: conda-envs/windows-environment-test-py38.yml
+          use-mamba: true
           use-only-tar-bz2: true # IMPORTANT: This needs to be set for caching to work properly!
       - name: Install-pymc
         run: |

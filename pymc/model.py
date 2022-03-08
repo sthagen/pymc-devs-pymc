@@ -46,7 +46,6 @@ from aesara.tensor.random.opt import local_subtensor_rv_lift
 from aesara.tensor.random.var import RandomStateSharedVariable
 from aesara.tensor.sharedvar import ScalarSharedVariable
 from aesara.tensor.var import TensorVariable
-from pandas import Series
 
 from pymc.aesaraf import (
     compile_pymc,
@@ -59,6 +58,7 @@ from pymc.aesaraf import (
 from pymc.blocking import DictToArrayBijection, RaveledVars
 from pymc.data import GenTensorVariable, Minibatch
 from pymc.distributions import joint_logpt, logp_transform
+from pymc.distributions.logprob import _get_scaling
 from pymc.exceptions import ImputationWarning, SamplingError, ShapeError
 from pymc.initial_point import make_initial_point_fn
 from pymc.math import flatten_list
@@ -631,15 +631,13 @@ class Model(WithMemoization, metaclass=ContextMeta):
                     raise ValueError(f"Can only compute the gradient of continuous types: {var}")
 
         if tempered:
-            # TODO: Should this differ from self.datalogpt,
-            #  where the potential terms are added to the observations?
-            costs = [self.varlogpt + self.potentiallogpt, self.observedlogpt]
+            costs = [self.varlogpt, self.datalogpt]
         else:
             costs = [self.logpt()]
 
         input_vars = {i for i in graph_inputs(costs) if not isinstance(i, Constant)}
         extra_vars = [self.rvs_to_values.get(var, var) for var in self.free_RVs]
-        ip = self.recompute_initial_point(0)
+        ip = self.compute_initial_point(0)
         extra_vars_and_values = {
             var: ip[var.name] for var in extra_vars if var in input_vars and var not in grad_vars
         }
@@ -900,10 +898,11 @@ class Model(WithMemoization, metaclass=ContextMeta):
     @property
     def unobserved_value_vars(self):
         """List of all random variables (including untransformed projections),
-        as well as deterministics used as inputs and outputs of the the model's
+        as well as deterministics used as inputs and outputs of the model's
         log-likelihood graph
         """
         vars = []
+        untransformed_vars = []
         for rv in self.free_RVs:
             value_var = self.rvs_to_values[rv]
             transform = getattr(value_var.tag, "transform", None)
@@ -912,13 +911,16 @@ class Model(WithMemoization, metaclass=ContextMeta):
                 # each transformed variable
                 untrans_value_var = transform.backward(value_var, *rv.owner.inputs)
                 untrans_value_var.name = rv.name
-                vars.append(untrans_value_var)
+                untransformed_vars.append(untrans_value_var)
             vars.append(value_var)
+
+        # Remove rvs from untransformed values graph
+        untransformed_vars, _ = rvs_to_value_vars(untransformed_vars, apply_transforms=True)
 
         # Remove rvs from deterministics graph
         deterministics, _ = rvs_to_value_vars(self.deterministics, apply_transforms=True)
 
-        return vars + deterministics
+        return vars + untransformed_vars + deterministics
 
     @property
     def basic_RVs(self):
@@ -987,24 +989,24 @@ class Model(WithMemoization, metaclass=ContextMeta):
 
     @property
     def test_point(self) -> Dict[str, np.ndarray]:
-        """Deprecated alias for `Model.recompute_initial_point(seed=None)`."""
+        """Deprecated alias for `Model.compute_initial_point(seed=None)`."""
         warnings.warn(
-            "`Model.test_point` has been deprecated. Use `Model.recompute_initial_point(seed=None)`.",
+            "`Model.test_point` has been deprecated. Use `Model.compute_initial_point(seed=None)`.",
             FutureWarning,
         )
-        return self.recompute_initial_point()
+        return self.compute_initial_point()
 
     @property
     def initial_point(self) -> Dict[str, np.ndarray]:
-        """Deprecated alias for `Model.recompute_initial_point(seed=None)`."""
+        """Deprecated alias for `Model.compute_initial_point(seed=None)`."""
         warnings.warn(
-            "`Model.initial_point` has been deprecated. Use `Model.recompute_initial_point(seed=None)`.",
+            "`Model.initial_point` has been deprecated. Use `Model.compute_initial_point(seed=None)`.",
             FutureWarning,
         )
-        return self.recompute_initial_point()
+        return self.compute_initial_point()
 
-    def recompute_initial_point(self, seed=None) -> Dict[str, np.ndarray]:
-        """Recomputes the initial point of the model.
+    def compute_initial_point(self, seed=None) -> Dict[str, np.ndarray]:
+        """Computes the initial point of the model.
 
         Returns
         -------
@@ -1012,7 +1014,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
             Maps names of transformed variables to numeric initial values in the transformed space.
         """
         if seed is None:
-            seed = self.rng_seeder.randint(2 ** 30, dtype=np.int64)
+            seed = self.rng_seeder.randint(2**30, dtype=np.int64)
         fn = make_initial_point_fn(model=self, return_transformed=True)
         return Point(fn(seed), model=self)
 
@@ -1039,7 +1041,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
         The new ``RandomStateSharedVariable`` is also added to
         ``Model.rng_seq``.
         """
-        new_seed = self.rng_seeder.randint(2 ** 30, dtype=np.int64)
+        new_seed = self.rng_seeder.randint(2**30, dtype=np.int64)
         next_rng = aesara.shared(np.random.RandomState(new_seed), borrow=True)
         next_rng.tag.is_rng = True
 
@@ -1235,6 +1237,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
         name = self.name_for(name)
         rv_var.name = name
         rv_var.tag.total_size = total_size
+        rv_var.tag.scaling = _get_scaling(total_size, shape=rv_var.shape, ndim=rv_var.ndim)
 
         # Associate previously unknown dimension names with
         # the length of the corresponding RV dimension.
@@ -1437,7 +1440,10 @@ class Model(WithMemoization, metaclass=ContextMeta):
         if dims is not None:
             if isinstance(dims, str):
                 dims = (dims,)
-            assert all(dim in self.coords or dim is None for dim in dims)
+            if any(dim not in self.coords and dim is not None for dim in dims):
+                raise ValueError(f"Dimension {dim} is not specified in `coords`.")
+            if any(var.name == dim for dim in dims):
+                raise ValueError(f"Variable `{var.name}` has the same name as its dimension label.")
             self._RV_dims[var.name] = dims
 
         self.named_vars[var.name] = var
@@ -1540,7 +1546,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
         kwargs.setdefault("on_unused_input", "ignore")
         f = self.compile_fn(outs, inputs=self.value_vars, point_fn=False, profile=profile, **kwargs)
         if point is None:
-            point = self.recompute_initial_point()
+            point = self.compute_initial_point()
 
         for _ in range(n):
             f(**point)
@@ -1669,7 +1675,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
 
             initial_eval = self.point_logps(point=elem)
 
-            if not np.all(np.isfinite(initial_eval)):
+            if not all(np.isfinite(v) for v in initial_eval.values()):
                 raise SamplingError(
                     "Initial evaluation of model at starting point failed!\n"
                     f"Starting values:\n{elem}\n\n"
@@ -1688,32 +1694,29 @@ class Model(WithMemoization, metaclass=ContextMeta):
 
         Parameters
         ----------
-        point: Point
+        point: Point, optional
             Point to be evaluated.  If ``None``, then ``model.initial_point``
             is used.
-        round_vals: int
-            Number of decimals to round log-probabilities
+        round_vals: int, default 2
+            Number of decimals to round log-probabilities.
 
         Returns
         -------
-        Pandas Series
+        log_probability_of_point : dict
+            Log probability of `point`.
         """
         if point is None:
-            point = self.recompute_initial_point()
+            point = self.compute_initial_point()
 
         factors = self.basic_RVs + self.potentials
-        return Series(
-            {
-                factor.name: np.round(np.asarray(factor_logp), round_vals)
-                for factor, factor_logp in zip(
-                    factors,
-                    self.compile_fn([at.sum(factor) for factor in self.logpt(factors, sum=False)])(
-                        point
-                    ),
-                )
-            },
-            name="Point log-probability",
-        )
+        factor_logps_fn = [at.sum(factor) for factor in self.logpt(factors, sum=False)]
+        return {
+            factor.name: np.round(np.asarray(factor_logp), round_vals)
+            for factor, factor_logp in zip(
+                factors,
+                self.compile_fn(factor_logps_fn)(point),
+            )
+        }
 
 
 # this is really disgusting, but it breaks a self-loop: I can't pass Model
@@ -1870,7 +1873,7 @@ def Potential(name, var, model=None):
     """
     model = modelcontext(model)
     var.name = model.name_for(name)
-    var.tag.scaling = None
+    var.tag.scaling = 1.0
     model.potentials.append(var)
     model.add_random_variable(var)
 

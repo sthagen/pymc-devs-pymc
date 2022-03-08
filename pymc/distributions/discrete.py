@@ -11,6 +11,8 @@
 #   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
+import warnings
+
 import aesara.tensor as at
 import numpy as np
 
@@ -488,6 +490,12 @@ class DiscreteWeibull(Discrete):
         beta = at.as_tensor_variable(floatX(beta))
         return super().dist([q, beta], **kwargs)
 
+    def get_moment(rv, size, q, beta):
+        median = at.power(at.log(0.5) / at.log(q), 1 / beta) - 1
+        if not rv_size_is_none(size):
+            median = at.full(size, median)
+        return median
+
     def logp(value, q, beta):
         r"""
         Calculate log-probability of DiscreteWeibull distribution at specified value.
@@ -650,7 +658,7 @@ class NegativeBinomial(Discrete):
 
     The negative binomial distribution describes a Poisson random variable
     whose rate parameter is gamma distributed.
-    The pmf of this distribution is
+    Its pmf, parametrized by the parameters alpha and mu of the gamma distribution, is
 
     .. math::
 
@@ -692,15 +700,24 @@ class NegativeBinomial(Discrete):
 
     .. math::
 
-        \mu &= \frac{n(1-p)}{p} \\
-        \alpha &= n
+        p &= \frac{\alpha}{\mu + \alpha} \\
+        n &= \alpha
+
+    If it is parametrized in terms of n and p, the negative binomial describes the probability to have x failures
+    before the n-th success, given the probability p of success in each trial. Its pmf is
+
+    .. math::
+
+        f(x \mid n, p) =
+           \binom{x + n - 1}{x}
+           (p)^n (1 - p)^x
 
     Parameters
     ----------
-    mu: float
-        Poission distribution parameter (mu > 0).
     alpha: float
-        Gamma distribution parameter (alpha > 0).
+        Gamma distribution shape parameter (alpha > 0).
+    mu: float
+        Gamma distribution mean (mu > 0).
     p: float
         Alternative probability of success in each trial (0 < p < 1).
     n: float
@@ -954,12 +971,12 @@ class HyperGeometric(Discrete):
 
     Parameters
     ----------
-    N : integer
-        Total size of the population
-    k : integer
-        Number of successful individuals in the population
-    n : integer
-        Number of samples drawn from the population
+    N : tensor_like of integer
+        Total size of the population (N > 0)
+    k : tensor_like of integer
+        Number of successful individuals in the population (0 <= k <= N)
+    n : tensor_like of integer
+        Number of samples drawn from the population (0 <= n <= N)
     """
 
     rv_op = hypergeometric
@@ -987,6 +1004,10 @@ class HyperGeometric(Discrete):
         value : numeric
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
             values are desired the values must be provided in a numpy array or Aesara tensor
+        good : integer, array_like or TensorVariable
+            Number of successful individuals in the population. Alias for parameter :math:`k`.
+        bad : integer, array_like or TensorVariable
+            Number of unsuccessful individuals in the population. Alias for :math:`N-k`.
 
         Returns
         -------
@@ -1025,8 +1046,14 @@ class HyperGeometric(Discrete):
 
         Parameters
         ----------
-        value: numeric
+        value : numeric
             Value for which log CDF is calculated.
+        good : integer
+            Number of successful individuals in the population. Alias for parameter :math:`k`.
+        bad : integer
+            Number of unsuccessful individuals in the population. Alias for :math:`N-k`.
+        n : integer
+            Number of samples drawn from the population (0 <= n <= N)
 
         Returns
         -------
@@ -1224,7 +1251,16 @@ class Categorical(Discrete):
 
     @classmethod
     def dist(cls, p, **kwargs):
-
+        if isinstance(p, np.ndarray) or isinstance(p, list):
+            if (np.asarray(p) < 0).any():
+                raise ValueError(f"Negative `p` parameters are not valid, got: {p}")
+            p_sum = np.sum([p], axis=-1)
+            if not np.all(np.isclose(p_sum, 1.0)):
+                warnings.warn(
+                    f"`p` parameters sum to {p_sum}, instead of 1.0. They will be automatically rescaled. You can rescale them directly to get rid of this warning.",
+                    UserWarning,
+                )
+                p = p / at.sum(p, axis=-1, keepdims=True)
         p = at.as_tensor_variable(floatX(p))
         return super().dist([p], **kwargs)
 
@@ -1247,7 +1283,6 @@ class Categorical(Discrete):
         """
         k = at.shape(p)[-1]
         p_ = p
-        p = p_ / at.sum(p_, axis=-1, keepdims=True)
         value_clip = at.clip(value, 0, k - 1)
 
         if p.ndim > 1:
@@ -1939,7 +1974,9 @@ class _OrderedProbit(Categorical):
         _log_p = at.concatenate(
             [
                 at.shape_padright(normal_lccdf(0, sigma, probits[..., 0])),
-                log_diff_normal_cdf(0, sigma, probits[..., :-1], probits[..., 1:]),
+                log_diff_normal_cdf(
+                    0, at.shape_padright(sigma), probits[..., :-1], probits[..., 1:]
+                ),
                 at.shape_padright(normal_lcdf(0, sigma, probits[..., -1])),
             ],
             axis=-1,

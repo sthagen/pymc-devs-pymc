@@ -140,20 +140,13 @@ class TestSMC(SeededTest):
             with pm.Model() as model:
                 a = pm.Beta("a", alpha, beta)
                 y = pm.Bernoulli("y", a, observed=data)
-                trace = pm.sample_smc(2000, return_inferencedata=False)
-                marginals.append(trace.report.log_marginal_likelihood)
+                trace = pm.sample_smc(2000, chains=2, return_inferencedata=False)
+            # log_marignal_likelihood is found in the last value of each chain
+            lml = np.mean([chain[-1] for chain in trace.report.log_marginal_likelihood])
+            marginals.append(lml)
 
         # compare to the analytical result
-        assert (
-            np.abs(
-                np.exp(
-                    np.nanmean(np.array(marginals[1], dtype=float))
-                    - np.nanmean(np.array(marginals[0], dtype=float))
-                    - 4.0
-                )
-            )
-            <= 1
-        )
+        assert abs(np.exp(marginals[1] - marginals[0]) - 4.0) <= 1
 
     def test_start(self):
         with pm.Model() as model:
@@ -172,36 +165,29 @@ class TestSMC(SeededTest):
                 draws=10,
                 chains=1,
                 threshold=0.7,
-                n_steps=15,
-                tune_steps=False,
-                p_acc_rate=0.5,
+                correlation_threshold=0.02,
                 return_inferencedata=False,
                 kernel=pm.smc.IMH,
             )
 
             assert trace.report.threshold == 0.7
             assert trace.report.n_draws == 10
-            assert trace.report.n_tune == 15
-            assert trace.report.tune_steps is False
-            assert trace.report.p_acc_rate == 0.5
+
+            assert trace.report.correlation_threshold == 0.02
 
         with self.fast_model:
             trace = pm.sample_smc(
                 draws=10,
                 chains=1,
                 threshold=0.95,
-                n_steps=15,
-                tune_steps=False,
-                p_acc_rate=0.5,
+                correlation_threshold=0.02,
                 return_inferencedata=False,
                 kernel=pm.smc.MH,
             )
 
             assert trace.report.threshold == 0.95
             assert trace.report.n_draws == 10
-            assert trace.report.n_tune == 15
-            assert trace.report.tune_steps is False
-            assert trace.report.p_acc_rate == 0.5
+            assert trace.report.correlation_threshold == 0.02
 
     @pytest.mark.parametrize("chains", (1, 2))
     def test_return_datatype(self, chains):
@@ -321,7 +307,7 @@ class TestSimulator(SeededTest):
         assert abs(self.data.std() - trace["b"].mean()) < 0.05
 
         assert pr_p["s"].shape == (1000, 1000)
-        assert abs(0 - pr_p["s"].mean()) < 0.10
+        assert abs(0 - pr_p["s"].mean()) < 0.15
         assert abs(1.4 - pr_p["s"].std()) < 0.10
 
         assert po_p["s"].shape == (1000, 1000)

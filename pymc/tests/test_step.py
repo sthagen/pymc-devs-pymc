@@ -528,7 +528,7 @@ class TestStepMethods:  # yield test doesn't work subclassing object
             x = Normal("x", mu=0, sigma=1)
             y = Normal("y", mu=x, sigma=1, observed=1)
             if step_method.__name__ == "NUTS":
-                step = step_method(scaling=model.recompute_initial_point())
+                step = step_method(scaling=model.compute_initial_point())
                 idata = sample(
                     0, tune=n_steps, discard_tuned_samples=False, step=step, random_seed=1, chains=1
                 )
@@ -612,7 +612,7 @@ class TestStepMethods:  # yield test doesn't work subclassing object
 
     def test_step_categorical(self):
         start, model, (mu, C) = simple_categorical()
-        unc = C ** 0.5
+        unc = C**0.5
         check = (("x", np.mean, mu, unc / 10.0), ("x", np.std, unc, unc / 10.0))
         with model:
             steps = (
@@ -626,7 +626,7 @@ class TestStepMethods:  # yield test doesn't work subclassing object
     @pytest.mark.xfail(reason="EllipticalSlice not refactored for v4")
     def test_step_elliptical_slice(self):
         start, model, (K, L, mu, std, noise) = mv_prior_simple()
-        unc = noise ** 0.5
+        unc = noise**0.5
         check = (("x", np.mean, mu, unc / 10.0), ("x", np.std, std, unc / 10.0))
         with model:
             steps = (EllipticalSlice(prior_cov=K), EllipticalSlice(prior_chol=L))
@@ -641,7 +641,7 @@ class TestMetropolisProposal:
     def test_proposal_choice(self):
         _, model, _ = mv_simple()
         with model:
-            initial_point = model.recompute_initial_point()
+            initial_point = model.compute_initial_point()
             initial_point_size = sum(initial_point[n.name].size for n in model.value_vars)
 
             s = np.ones(initial_point_size)
@@ -1060,7 +1060,7 @@ class TestMLDA:
             assert sampler.base_proposal_dist is None
             assert isinstance(sampler.step_method_below.proposal_dist, UniformProposal)
 
-            initial_point = model.recompute_initial_point()
+            initial_point = model.compute_initial_point()
             initial_point_size = sum(initial_point[n.name].size for n in model.value_vars)
             s = np.ones(initial_point_size)
             sampler = MLDA(coarse_models=[model_coarse], base_sampler="Metropolis", base_S=s)
@@ -1095,7 +1095,7 @@ class TestMLDA:
         _, model_coarse, _ = mv_simple_coarse()
         _, model_very_coarse, _ = mv_simple_very_coarse()
         with model:
-            initial_point = model.recompute_initial_point()
+            initial_point = model.compute_initial_point()
             initial_point_size = sum(initial_point[n.name].size for n in model.value_vars)
             s = np.ones(initial_point_size) + 2.0
             sampler = MLDA(
@@ -1467,9 +1467,9 @@ class TestMLDA:
         # y = a + b*x
         true_regression_line = true_intercept + true_slope * x
         # add noise
-        y = true_regression_line + np.random.normal(0, sigma ** 2, size)
+        y = true_regression_line + np.random.normal(0, sigma**2, size)
         s = np.identity(y.shape[0], dtype=p)
-        np.fill_diagonal(s, sigma ** 2)
+        np.fill_diagonal(s, sigma**2)
 
         # forward model Op - here, just the regression equation
         class ForwardModel(Op):
@@ -1600,7 +1600,7 @@ class TestMLDA:
         # y = a + b*x
         true_regression_line = true_intercept + true_slope * x
         # add noise
-        y = true_regression_line + np.random.normal(0, sigma ** 2, size)
+        y = true_regression_line + np.random.normal(0, sigma**2, size)
         s = sigma
 
         x_coarse_0 = x[::3]
@@ -1636,7 +1636,7 @@ class TestMLDA:
                 with self.pymc_model:
                     set_data({"Q": np.array(x_coeff, dtype=p)})
                 outputs[0][0] = np.array(
-                    -(0.5 / s ** 2) * np.sum((temp - self.y) ** 2, dtype=p), dtype=p
+                    -(0.5 / s**2) * np.sum((temp - self.y) ** 2, dtype=p), dtype=p
                 )
 
         # run four MLDA steppers for all combinations of

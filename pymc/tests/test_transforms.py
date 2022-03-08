@@ -233,7 +233,7 @@ def test_interval_near_boundary():
         pm.Uniform("x", initval=x0, lower=lb, upper=ub)
 
     log_prob = model.point_logps()
-    np.testing.assert_allclose(log_prob, np.array([-52.68]))
+    np.testing.assert_allclose(list(log_prob.values()), np.array([-52.68]))
 
 
 def test_circular():
@@ -287,7 +287,7 @@ class TestElementWiseLogp(SeededTest):
         x = model.free_RVs[0]
         x_val_transf = x.tag.value_var
 
-        pt = model.recompute_initial_point(0)
+        pt = model.compute_initial_point(0)
         test_array_transf = floatX(np.random.randn(*pt[x_val_transf.name].shape))
         transform = x_val_transf.tag.transform
         test_array_untransf = transform.backward(test_array_transf, *x.owner.inputs).eval()
@@ -308,7 +308,7 @@ class TestElementWiseLogp(SeededTest):
         x = model.free_RVs[0]
         x_val_transf = x.tag.value_var
 
-        pt = model.recompute_initial_point(0)
+        pt = model.compute_initial_point(0)
         test_array_transf = floatX(np.random.randn(*pt[x_val_transf.name].shape))
         transform = x_val_transf.tag.transform
         test_array_untransf = transform.backward(test_array_transf, *x.owner.inputs).eval()

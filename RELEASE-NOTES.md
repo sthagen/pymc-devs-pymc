@@ -7,15 +7,13 @@ Instead update the vNext section until 4.0.0 is out.
 ⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠⚠
 -->
 
-## PyMC vNext (4.0.0b1 → 4.0.0b2 → 4.0.0b3 → 4.0.0)
+## PyMC vNext (4.0.0b1 → 4.0.0b2 → 4.0.0b3 → 4.0.0b4 → 4.0.0)
 ⚠ The changes below are the delta between the upcoming releases `v3.11.5` →...→ `v4.0.0`.
 
-### No-yet working features
+### Not-yet working features
 We plan to get these working again, but at this point their inner workings have not been refactored.
 - Timeseries distributions (see [#4642](https://github.com/pymc-devs/pymc/issues/4642))
 - Mixture distributions (see [#4781](https://github.com/pymc-devs/pymc/issues/4781))
-- Cholesky distributions (see WIP PR [#4784](https://github.com/pymc-devs/pymc/pull/4784))
-- Variational inference submodule (see WIP PR [#4582](https://github.com/pymc-devs/pymc/pull/4582))
 - Elliptical slice sampling (see [#5137](https://github.com/pymc-devs/pymc/issues/5137))
 - `BaseStochasticGradient` (see [#5138](https://github.com/pymc-devs/pymc/issues/5138))
 - `pm.sample_posterior_predictive_w` (see [#4807](https://github.com/pymc-devs/pymc/issues/4807))
@@ -87,6 +85,7 @@ All of the above apply to:
 - ArviZ `plots` and `stats` *wrappers* were removed. The functions are now just available by their original names (see [#4549](https://github.com/pymc-devs/pymc/pull/4471) and `3.11.2` release notes).
 - `pm.sample_posterior_predictive(vars=...)` kwarg was removed in favor of `var_names` (see [#4343](https://github.com/pymc-devs/pymc/pull/4343)).
 - `ElemwiseCategorical` step method was removed (see [#4701](https://github.com/pymc-devs/pymc/pull/4701))
+- `LKJCholeskyCov` `compute_corr` keyword argument is now set to `True` by default (see[#5382](https://github.com/pymc-devs/pymc/pull/5382))
 
 ### Ongoing deprecations
 - Old API still works in `v4` and has a deprecation warning.
@@ -125,8 +124,17 @@ This includes API changes we did not warn about since at least `3.11.0` (2021-01
   - `pm.Data` now passes additional kwargs to `aesara.shared`/`at.as_tensor`. [#5098](https://github.com/pymc-devs/pymc/pull/5098).
 - Univariate censored distributions are now available via `pm.Censored`. [#5169](https://github.com/pymc-devs/pymc/pull/5169)
 - Nested models now inherit the parent model's coordinates. [#5344](https://github.com/pymc-devs/pymc/pull/5344)
+- `softmax` and `log_softmax` functions added to `math` module (see [#5279](https://github.com/pymc-devs/pymc/pull/5279)).
 - ...
 
+
+## Documentation
+- Switched to the [pydata-sphinx-theme](https://pydata-sphinx-theme.readthedocs.io/en/latest/)
+- Updated our documentation tooling to use [MyST](https://myst-parser.readthedocs.io/en/latest/), [MyST-NB](https://myst-nb.readthedocs.io/en/latest/), sphinx-design, notfound.extension,
+  sphinx-copybutton and sphinx-remove-toctrees.
+- Separated the builds of the example notebooks and of the versioned docs.
+- Restructured the documentation to facilitate learning paths
+- Updated API docs to document objects at the path users should use to import them
 
 ### Internal changes
 - ⚠ PyMC now requires Scipy version `>= 1.4.1` (see [4857](https://github.com/pymc-devs/pymc/pull/4857)).
@@ -137,6 +145,7 @@ This includes API changes we did not warn about since at least `3.11.0` (2021-01
 - `math.log1mexp` and `math.log1mexp_numpy` will expect negative inputs in the future. A `FutureWarning` is now raised unless `negative_input=True` is set (see [#4860](https://github.com/pymc-devs/pymc/pull/4860)).
 - Changed name of `Lognormal` distribution to `LogNormal` to harmonize CamelCase usage for distribution names.
 - Attempt to iterate over MultiTrace will raise NotImplementedError.
+- Removed silent normalisation of `p` parameters in Categorical and Multinomial distributions (see [#5370](https://github.com/pymc-devs/pymc/pull/5370)).
 - ...
 
 

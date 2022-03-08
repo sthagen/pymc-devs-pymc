@@ -59,7 +59,7 @@ class DocstringModel(pm.Model):
         self.register_rv(Normal.dist(mu=mean, sigma=sigma), "v1")
         Normal("v2", mu=mean, sigma=sigma)
         Normal("v3", mu=mean, sigma=Normal("sd", mu=10, sigma=1, initval=1.0))
-        Deterministic("v3_sq", self.v3 ** 2)
+        Deterministic("v3_sq", self.v3**2)
         Potential("p1", at.constant(1))
 
 
@@ -191,7 +191,7 @@ def test_duplicate_vars():
     with pytest.raises(ValueError) as err:
         with pm.Model():
             a = pm.Normal("a")
-            pm.Potential("a", a ** 2)
+            pm.Potential("a", a**2)
     err.match("already exists")
 
     with pytest.raises(ValueError) as err:
@@ -287,7 +287,7 @@ class TestValueGradFunction(unittest.TestCase):
             step = pm.NUTS()
 
         func = step._logp_dlogp_func
-        initial_point = m.recompute_initial_point()
+        initial_point = m.compute_initial_point()
         func.set_extra_values(initial_point)
         q = func.dict_to_array(initial_point)
         logp, dlogp = func(q)
@@ -366,6 +366,7 @@ def test_tempered_logp_dlogp():
     with pm.Model() as model:
         pm.Normal("x")
         pm.Normal("y", observed=1)
+        pm.Potential("z", at.constant(-1.0, dtype=aesara.config.floatX))
 
     func = model.logp_dlogp_function()
     func.set_extra_values({})
@@ -380,13 +381,15 @@ def test_tempered_logp_dlogp():
     func_temp_nograd.set_extra_values({})
 
     x = np.ones(1, dtype=func.dtype)
-    assert func(x) == func_temp(x)
-    assert func_nograd(x) == func(x)[0]
-    assert func_temp_nograd(x) == func(x)[0]
+    npt.assert_allclose(func(x)[0], func_temp(x)[0])
+    npt.assert_allclose(func(x)[1], func_temp(x)[1])
+
+    npt.assert_allclose(func_nograd(x), func(x)[0])
+    npt.assert_allclose(func_temp_nograd(x), func(x)[0])
 
     func_temp.set_weights(np.array([0.0], dtype=func.dtype))
     func_temp_nograd.set_weights(np.array([0.0], dtype=func.dtype))
-    npt.assert_allclose(func(x)[0], 2 * func_temp(x)[0])
+    npt.assert_allclose(func(x)[0], 2 * func_temp(x)[0] - 1)
     npt.assert_allclose(func(x)[1], func_temp(x)[1])
 
     npt.assert_allclose(func_nograd(x), func(x)[0])
@@ -394,7 +397,7 @@ def test_tempered_logp_dlogp():
 
     func_temp.set_weights(np.array([0.5], dtype=func.dtype))
     func_temp_nograd.set_weights(np.array([0.5], dtype=func.dtype))
-    npt.assert_allclose(func(x)[0], 4 / 3 * func_temp(x)[0])
+    npt.assert_allclose(func(x)[0], 4 / 3 * (func_temp(x)[0] - 1 / 4))
     npt.assert_allclose(func(x)[1], func_temp(x)[1])
 
     npt.assert_allclose(func_nograd(x), func(x)[0])
@@ -517,7 +520,7 @@ def test_initial_point():
     assert a in model.initial_values
     assert x in model.initial_values
     assert model.initial_values[b] == b_initval
-    assert model.recompute_initial_point(0)["b_interval__"] == b_initval_trans
+    assert model.compute_initial_point(0)["b_interval__"] == b_initval_trans
     assert model.initial_values[y] == y_initval
 
 
@@ -746,7 +749,7 @@ def test_model_d2logp(jacobian):
 def test_deterministic():
     with pm.Model() as model:
         x = pm.Normal("x", 0, 1)
-        y = pm.Deterministic("y", x ** 2)
+        y = pm.Deterministic("y", x**2)
 
     assert model.y == y
     assert model["y"] == y
