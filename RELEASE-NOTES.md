@@ -13,7 +13,7 @@ Instead update the vNext section until 4.0.0 is out.
 ### Not-yet working features
 We plan to get these working again, but at this point their inner workings have not been refactored.
 - Timeseries distributions (see [#4642](https://github.com/pymc-devs/pymc/issues/4642))
-- Mixture distributions (see [#4781](https://github.com/pymc-devs/pymc/issues/4781))
+- Nested Mixture distributions (see [#5533](https://github.com/pymc-devs/pymc/issues/5533))
 - Elliptical slice sampling (see [#5137](https://github.com/pymc-devs/pymc/issues/5137))
 - `BaseStochasticGradient` (see [#5138](https://github.com/pymc-devs/pymc/issues/5138))
 - `pm.sample_posterior_predictive_w` (see [#4807](https://github.com/pymc-devs/pymc/issues/4807))
@@ -27,6 +27,7 @@ Also check out the [milestones](https://github.com/pymc-devs/pymc/milestones) fo
 
 All of the above apply to:
 
+- BART was removed [#5566](https://github.com/pymc-devs/pymc/pull/5566). It is now available from [pymc-experimental](https://github.com/pymc-devs/pymc-experimental)
 - ⚠ The library is now named, installed and imported as "pymc". For example: `pip install pymc`.
 - ⚠ Theano-PyMC has been replaced with Aesara, so all external references to `theano`, `tt`, and `pymc3.theanof` need to be replaced with `aesara`, `at`, and `pymc.aesaraf` (see [4471](https://github.com/pymc-devs/pymc/pull/4471)).
 - `pm.Distribution(...).logp(x)` is now `pm.logp(pm.Distribution(...), x)`.
@@ -72,6 +73,7 @@ All of the above apply to:
   - In the gp.utils file, the `kmeans_inducing_points` function now passes through `kmeans_kwargs` to scipy's k-means function.
   - The function `replace_with_values` function has been added to `gp.utils`.
   - `MarginalSparse` has been renamed `MarginalApprox`.
+  - Removed `MixtureSameFamily`. `Mixture` is now capable of handling batched multivariate components (see [#5438](https://github.com/pymc-devs/pymc/pull/5438)).
 - ...
 
 ### Expected breaks

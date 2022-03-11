@@ -186,7 +186,7 @@ class Distribution(metaclass=DistributionMeta):
     """Statistical distribution"""
 
     rv_class = None
-    rv_op = None
+    rv_op: RandomVariable = None
 
     def __new__(
         cls,
@@ -500,6 +500,7 @@ class SymbolicDistribution:
             rv_out = cls.change_size(
                 rv=rv_out,
                 new_size=resize_shape,
+                expand=True,
             )
 
         rv_out = model.register_rv(
