@@ -645,6 +645,7 @@ class TruncatedNormal(BoundedContinuous):
 
 
     .. plot::
+        :context: close-figs
 
         import matplotlib.pyplot as plt
         import numpy as np
@@ -673,13 +674,16 @@ class TruncatedNormal(BoundedContinuous):
 
     Parameters
     ----------
-    mu: float
+    mu : tensor_like of float, default 0
         Mean.
-    sigma: float
-        Standard deviation (sigma > 0).
-    lower: float (optional)
+    sigma : tensor_like of float, optional
+        Standard deviation (sigma > 0) (only required if tau is not specified).
+        Defaults to 1 if neither sigma nor tau is specified.
+    tau : tensor_like of float, optional
+        Precision (tau > 0) (only required if sigma is not specified).
+    lower : tensor_like of float, default - numpy.inf
         Left bound.
-    upper: float (optional)
+    upper : tensor_like of float, default numpy.inf
         Right bound.
 
     Examples
@@ -709,7 +713,6 @@ class TruncatedNormal(BoundedContinuous):
         sd: Optional[DIST_PARAMETER_TYPES] = None,
         lower: Optional[DIST_PARAMETER_TYPES] = None,
         upper: Optional[DIST_PARAMETER_TYPES] = None,
-        transform: str = "auto",
         *args,
         **kwargs,
     ) -> RandomVariable:
@@ -762,9 +765,9 @@ class TruncatedNormal(BoundedContinuous):
 
         Parameters
         ----------
-        value: numeric
+        value : tensor_like of float
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or Aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
@@ -1324,6 +1327,7 @@ class Kumaraswamy(UnitContinuous):
            abx^{a-1}(1-x^a)^{b-1}
 
     .. plot::
+        :context: close-figs
 
         import matplotlib.pyplot as plt
         import numpy as np
@@ -1468,8 +1472,7 @@ class Exponential(PositiveContinuous):
 
     Notes
     -----
-    Logp calculation is defined in aeppl.logprob
-    https://github.com/aesara-devs/aeppl/blob/main/aeppl/logprob.py
+    Logp calculation is defined in `aeppl.logprob <https://github.com/aesara-devs/aeppl/blob/main/aeppl/logprob.py/>`_.
 
     Parameters
     ----------
@@ -1499,7 +1502,7 @@ class Exponential(PositiveContinuous):
 
         Parameters
         ----------
-        value: numeric or np.ndarray or aesara.tensor
+        value : tensor_like
             Value(s) for which log CDF is calculated. If the log CDF for
             multiple values are desired the values must be provided in a numpy
             array or Aesara tensor.
@@ -1530,6 +1533,7 @@ class Laplace(Continuous):
            \frac{1}{2b} \exp \left\{ - \frac{|x - \mu|}{b} \right\}
 
     .. plot::
+        :context: close-figs
 
         import matplotlib.pyplot as plt
         import numpy as np
@@ -1555,9 +1559,9 @@ class Laplace(Continuous):
 
     Parameters
     ----------
-    mu: float
+    mu : tensor_like of float
         Location parameter.
-    b: float
+    b : tensor_like of float
         Scale parameter (b > 0).
     """
     rv_op = laplace
@@ -1583,7 +1587,7 @@ class Laplace(Continuous):
 
         Parameters
         ----------
-        value: numeric or np.ndarray or aesara.tensor
+        value : tensor_like of float
             Value(s) for which log CDF is calculated. If the log CDF for multiple
             values are desired the values must be provided in a numpy array or Aesara tensor.
 
@@ -1861,6 +1865,7 @@ class StudentT(Continuous):
            \left[1+\frac{\lambda(x-\mu)^2}{\nu}\right]^{-\frac{\nu+1}{2}}
 
     .. plot::
+        :context: close-figs
 
         import matplotlib.pyplot as plt
         import numpy as np
@@ -1885,16 +1890,16 @@ class StudentT(Continuous):
 
     Parameters
     ----------
-    nu: float
+    nu : tensor_like of float
         Degrees of freedom, also known as normality parameter (nu > 0).
-    mu: float
+    mu : tensor_like of float, default 0
         Location parameter.
-    sigma: float
+    sigma : tensor_like of float, optional
         Scale parameter (sigma > 0). Converges to the standard deviation as nu
-        increases. (only required if lam is not specified)
-    lam: float
+        increases (only required if lam is not specified). Defaults to 1.
+    lam : tensor_like of float, optional
         Scale parameter (lam > 0). Converges to the precision as nu
-        increases. (only required if sigma is not specified)
+        increases (only required if sigma is not specified). Defaults to 1.
 
     Examples
     --------
@@ -1933,9 +1938,9 @@ class StudentT(Continuous):
 
         Parameters
         ----------
-        value: numeric
+        value : tensor_like of float
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or Aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
@@ -1959,7 +1964,7 @@ class StudentT(Continuous):
 
         Parameters
         ----------
-        value: numeric or np.ndarray or aesara.tensor
+        value : tensor_like of float
             Value(s) for which log CDF is calculated. If the log CDF for multiple
             values are desired the values must be provided in a numpy array or Aesara tensor.
 
@@ -2092,6 +2097,7 @@ class Cauchy(Continuous):
            \frac{1}{\pi \beta [1 + (\frac{x-\alpha}{\beta})^2]}
 
     .. plot::
+        :context: close-figs
 
         import matplotlib.pyplot as plt
         import numpy as np
@@ -2118,10 +2124,10 @@ class Cauchy(Continuous):
 
     Parameters
     ----------
-    alpha: float
-        Location parameter
-    beta: float
-        Scale parameter > 0
+    alpha : tensor_like of float
+        Location parameter.
+    beta : tensor_like of float
+        Scale parameter > 0.
     """
     rv_op = cauchy
 
@@ -2146,7 +2152,7 @@ class Cauchy(Continuous):
 
         Parameters
         ----------
-        value: numeric or np.ndarray or aesara.tensor
+        value : tensor_like of float
             Value(s) for which log CDF is calculated. If the log CDF for multiple
             values are desired the values must be provided in a numpy array or Aesara tensor.
 
@@ -2173,6 +2179,7 @@ class HalfCauchy(PositiveContinuous):
        f(x \mid \beta) = \frac{2}{\pi \beta [1 + (\frac{x}{\beta})^2]}
 
     .. plot::
+        :context: close-figs
 
         import matplotlib.pyplot as plt
         import numpy as np
@@ -2197,7 +2204,7 @@ class HalfCauchy(PositiveContinuous):
 
     Parameters
     ----------
-    beta: float
+    beta : tensor_like of float
         Scale parameter (beta > 0).
     """
     rv_op = halfcauchy
@@ -2220,7 +2227,7 @@ class HalfCauchy(PositiveContinuous):
 
         Parameters
         ----------
-        value: numeric or np.ndarray or aesara.tensor
+        value : tensor_like of float
             Value(s) for which log CDF is calculated. If the log CDF for multiple
             values are desired the values must be provided in a numpy array or Aesara tensor.
 
@@ -2684,7 +2691,7 @@ halfstudentt = HalfStudentTRV()
 
 class HalfStudentT(PositiveContinuous):
     r"""
-    Half Student's T log-likelihood
+    Half Student's T log-likelihood.
 
     The pdf of this distribution is
 
@@ -2696,6 +2703,7 @@ class HalfStudentT(PositiveContinuous):
             \left(1+\frac{1}{\nu}\frac{x^2}{\sigma^2}\right)^{-\frac{\nu+1}{2}}
 
     .. plot::
+        :context: close-figs
 
         import matplotlib.pyplot as plt
         import numpy as np
@@ -2719,14 +2727,14 @@ class HalfStudentT(PositiveContinuous):
 
     Parameters
     ----------
-    nu: float
+    nu : tensor_like of float, default 1
         Degrees of freedom, also known as normality parameter (nu > 0).
-    sigma: float
+    sigma : tensor_like of float, optional
         Scale parameter (sigma > 0). Converges to the standard deviation as nu
-        increases. (only required if lam is not specified)
-    lam: float
+        increases (only required if lam is not specified). Defaults to 1.
+    lam : tensor_like of float, optional
         Scale parameter (lam > 0). Converges to the precision as nu
-        increases. (only required if sigma is not specified)
+        increases (only required if sigma is not specified). Defaults to 1.
 
     Examples
     --------
@@ -2769,9 +2777,9 @@ class HalfStudentT(PositiveContinuous):
 
         Parameters
         ----------
-        value: numeric
+        value : tensor_like of float
             Value(s) for which log-probability is calculated. If the log probabilities for multiple
-            values are desired the values must be provided in a numpy array or Aesara tensor
+            values are desired the values must be provided in a numpy array or Aesara tensor.
 
         Returns
         -------
