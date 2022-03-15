@@ -130,7 +130,7 @@ from pymc.distributions.shape_utils import to_tuple
 from pymc.math import kronecker
 from pymc.model import Deterministic, Model, Point, Potential
 from pymc.tests.helpers import select_by_precision
-from pymc.vartypes import continuous_types
+from pymc.vartypes import continuous_types, discrete_types
 
 
 def get_lkj_cases():
@@ -934,7 +934,9 @@ class TestMatchesScipy:
         Check that logcdf of discrete distributions matches sum of logps up to value
         """
         # This test only works for scalar random variables
-        assert distribution.rv_op.ndim_supp == 0
+        rv_op = getattr(distribution, "rv_op", None)
+        if rv_op:
+            assert rv_op.ndim_supp == 0
 
         domains = paramdomains.copy()
         domains["value"] = domain
@@ -1742,35 +1744,36 @@ class TestMatchesScipy:
 
     def test_constantdist(self):
         self.check_logp(Constant, I, {"c": I}, lambda value, c: np.log(c == value))
+        self.check_logcdf(Constant, I, {"c": I}, lambda value, c: np.log(value >= c))
 
     def test_zeroinflatedpoisson(self):
-        def logp_fn(value, psi, theta):
+        def logp_fn(value, psi, mu):
             if value == 0:
-                return np.log((1 - psi) * sp.poisson.pmf(0, theta))
+                return np.log((1 - psi) * sp.poisson.pmf(0, mu))
             else:
-                return np.log(psi * sp.poisson.pmf(value, theta))
+                return np.log(psi * sp.poisson.pmf(value, mu))
 
-        def logcdf_fn(value, psi, theta):
-            return np.log((1 - psi) + psi * sp.poisson.cdf(value, theta))
+        def logcdf_fn(value, psi, mu):
+            return np.log((1 - psi) + psi * sp.poisson.cdf(value, mu))
 
         self.check_logp(
             ZeroInflatedPoisson,
             Nat,
-            {"psi": Unit, "theta": Rplus},
+            {"psi": Unit, "mu": Rplus},
             logp_fn,
         )
 
         self.check_logcdf(
             ZeroInflatedPoisson,
             Nat,
-            {"psi": Unit, "theta": Rplus},
+            {"psi": Unit, "mu": Rplus},
             logcdf_fn,
         )
 
         self.check_selfconsistency_discrete_logcdf(
             ZeroInflatedPoisson,
             Nat,
-            {"theta": Rplus, "psi": Unit},
+            {"mu": Rplus, "psi": Unit},
         )
 
     def test_zeroinflatednegativebinomial(self):
@@ -3416,3 +3419,17 @@ class TestLKJCholeskCov:
         assert resized_sd_dist.eval().shape == (10, 3)
         # LKJCov has support shape `(n * (n+1)) // 2`
         assert x.eval().shape == (10, 6)
+
+
+@pytest.mark.parametrize(
+    "dist, non_psi_args",
+    [
+        (pm.ZeroInflatedPoisson.dist, (2,)),
+        (pm.ZeroInflatedBinomial.dist, (2, 0.5)),
+        (pm.ZeroInflatedNegativeBinomial.dist, (2, 2)),
+    ],
+)
+def test_zero_inflated_dists_dtype_and_broadcast(dist, non_psi_args):
+    x = dist([0.5, 0.5, 0.5], *non_psi_args)
+    assert x.dtype in discrete_types
+    assert x.eval().shape == (3,)
