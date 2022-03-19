@@ -327,11 +327,13 @@ class TestSample(SeededTest):
 
         np.testing.assert_allclose(idata.posterior["y"], idata.posterior["x"] + 100)
 
-    def test_transform_with_rv_depenency(self):
+    def test_transform_with_rv_dependency(self):
         # Test that untransformed variables that depend on upstream variables are properly handled
         with pm.Model() as m:
             x = pm.HalfNormal("x", observed=1)
-            transform = pm.transforms.IntervalTransform(lambda *inputs: (inputs[-2], inputs[-1]))
+            transform = pm.distributions.transforms.Interval(
+                bounds_fn=lambda *inputs: (inputs[-2], inputs[-1])
+            )
             y = pm.Uniform("y", lower=0, upper=x, transform=transform)
             trace = pm.sample(tune=10, draws=50, return_inferencedata=False, random_seed=336)
 
@@ -707,7 +709,7 @@ class TestSamplePPC(SeededTest):
         x_shared = aesara.shared(x)
         y_shared = aesara.shared(y)
         with pm.Model(rng_seeder=rng) as model:
-            coeff = pm.Normal("x", mu=0, sd=1)
+            coeff = pm.Normal("x", mu=0, sigma=1)
             logistic = pm.Deterministic("p", pm.math.sigmoid(coeff * x_shared))
 
             obs = pm.Bernoulli("obs", p=logistic, observed=y_shared)
@@ -1106,12 +1108,14 @@ class TestSamplePriorPredictive(SeededTest):
         obs = np.random.normal(-1, 0.1, size=10)
         with pm.Model():
             mu = pm.Normal("mu", 0, 1)
-            sd = pm.HalfNormal("sd", 1e-6)
+            sigma = pm.HalfNormal("sigma", 1e-6)
             a = pm.DensityDist(
                 "a",
                 mu,
-                sd,
-                random=lambda mu, sd, rng=None, size=None: rng.normal(loc=mu, scale=sd, size=size),
+                sigma,
+                random=lambda mu, sigma, rng=None, size=None: rng.normal(
+                    loc=mu, scale=sigma, size=size
+                ),
                 observed=obs,
             )
             prior = pm.sample_prior_predictive(return_inferencedata=False)
@@ -1121,15 +1125,15 @@ class TestSamplePriorPredictive(SeededTest):
     def test_shape_edgecase(self):
         with pm.Model():
             mu = pm.Normal("mu", size=5)
-            sd = pm.Uniform("sd", lower=2, upper=3)
-            x = pm.Normal("x", mu=mu, sigma=sd, size=5)
+            sigma = pm.Uniform("sigma", lower=2, upper=3)
+            x = pm.Normal("x", mu=mu, sigma=sigma, size=5)
             prior = pm.sample_prior_predictive(10)
         assert prior.prior["mu"].shape == (1, 10, 5)
 
     def test_zeroinflatedpoisson(self):
         with pm.Model():
             mu = pm.Beta("mu", alpha=1, beta=1)
-            psi = pm.HalfNormal("psi", sd=1)
+            psi = pm.HalfNormal("psi", sigma=1)
             pm.ZeroInflatedPoisson("suppliers", psi=psi, mu=mu, size=20)
             gen_data = pm.sample_prior_predictive(samples=5000)
             assert gen_data.prior["mu"].shape == (1, 5000)
