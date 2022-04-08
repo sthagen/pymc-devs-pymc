@@ -614,6 +614,7 @@ def sample(
         f"({n_tune*n_chains:_d} + {n_draws*n_chains:_d} draws total) "
         f"took {mtrace.report.t_sampling:.0f} seconds."
     )
+    mtrace.report._log_summary()
 
     idata = None
     if compute_convergence_checks or return_inferencedata:
@@ -622,19 +623,18 @@ def sample(
             ikwargs.update(idata_kwargs)
         idata = pm.to_inference_data(mtrace, **ikwargs)
 
-    if compute_convergence_checks:
-        if draws - tune < 100:
-            warnings.warn(
-                "The number of samples is too small to check convergence reliably.", stacklevel=2
-            )
-        else:
-            mtrace.report._run_convergence_checks(idata, model)
-    mtrace.report._log_summary()
+        if compute_convergence_checks:
+            if draws - tune < 100:
+                warnings.warn(
+                    "The number of samples is too small to check convergence reliably.",
+                    stacklevel=2,
+                )
+            else:
+                mtrace.report._run_convergence_checks(idata, model)
 
-    if return_inferencedata:
-        return idata
-    else:
-        return mtrace
+        if return_inferencedata:
+            return idata
+    return mtrace
 
 
 def _check_start_shape(model, start: PointType):
@@ -1620,10 +1620,20 @@ def sample_posterior_predictive(
 
     _trace: Union[MultiTrace, PointList]
     nchain: int
+    if idata_kwargs is None:
+        idata_kwargs = {}
+    else:
+        idata_kwargs = idata_kwargs.copy()
+    if "coords" not in idata_kwargs:
+        idata_kwargs["coords"] = {}
     if isinstance(trace, InferenceData):
-        _trace = dataset_to_point_list(trace.posterior)
+        idata_kwargs["coords"].setdefault("draw", trace["posterior"]["draw"])
+        idata_kwargs["coords"].setdefault("chain", trace["posterior"]["chain"])
+        _trace = dataset_to_point_list(trace["posterior"])
         nchain, len_trace = chains_and_samples(trace)
     elif isinstance(trace, xarray.Dataset):
+        idata_kwargs["coords"].setdefault("draw", trace["draw"])
+        idata_kwargs["coords"].setdefault("chain", trace["chain"])
         _trace = dataset_to_point_list(trace)
         nchain, len_trace = chains_and_samples(trace)
     elif isinstance(trace, MultiTrace):
@@ -1704,7 +1714,7 @@ def sample_posterior_predictive(
 
     if not vars_to_sample:
         if return_inferencedata and not extend_inferencedata:
-            return None
+            return InferenceData()
         elif return_inferencedata and extend_inferencedata:
             return trace
         return {}
@@ -1782,12 +1792,11 @@ def sample_posterior_predictive(
 
     if not return_inferencedata:
         return ppc_trace
-    ikwargs: Dict[str, Any] = dict(model=model)
-    if idata_kwargs:
-        ikwargs.update(idata_kwargs)
+    ikwargs: Dict[str, Any] = dict(model=model, **idata_kwargs)
     if predictions:
         if extend_inferencedata:
             ikwargs.setdefault("idata_orig", trace)
+            ikwargs.setdefault("inplace", True)
         return pm.predictions_to_inference_data(ppc_trace, **ikwargs)
     converter = pm.backends.arviz.InferenceDataConverter(posterior_predictive=ppc_trace, **ikwargs)
     converter.nchains = nchain
