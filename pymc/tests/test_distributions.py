@@ -1612,6 +1612,7 @@ class TestMatchesScipy:
             Rplus,
             {"sigma": Rplus},
             lambda value, sigma: sp.halfcauchy.logpdf(value, 0, sigma),
+            extra_args={"nu": 1},
         )
 
     def test_skew_normal(self):
@@ -2767,7 +2768,7 @@ class TestBound:
             bound_shaped = Bound("boundedshaped", dist, lower=1, upper=10, shape=(3, 5))
             bound_dims = Bound("boundeddims", dist, lower=1, upper=10, dims="sample")
 
-        initial_point = m.compute_initial_point()
+        initial_point = m.initial_point()
         dist_size = initial_point["boundedsized_interval__"].shape
         dist_shape = initial_point["boundedshaped_interval__"].shape
         dist_dims = initial_point["boundeddims_interval__"].shape
