@@ -274,10 +274,7 @@ class Mixture(SymbolicDistribution):
 
         # Index components and squeeze mixture dimension
         mix_out_ = at.take_along_axis(stacked_components_, mix_indexes_padded_, axis=mix_axis)
-        # There is a Aesara bug in squeeze with negative axis
-        # https://github.com/aesara-devs/aesara/issues/830
-        # this is equivalent to np.squeeze(mix_out_, axis=mix_axis)
-        mix_out_ = at.squeeze(mix_out_, axis=mix_out_.ndim + mix_axis)
+        mix_out_ = at.squeeze(mix_out_, axis=mix_axis)
 
         # Output mix_indexes rng update so that it can be updated in place
         mix_indexes_rng_next_ = mix_indexes_.owner.outputs[0]
@@ -388,12 +385,6 @@ def marginal_mixture_logprob(op, values, rng, weights, *components, **kwargs):
 
     mix_logp = at.logsumexp(at.log(weights) + components_logp, axis=-1)
 
-    # Squeeze stack dimension
-    # There is a Aesara bug in squeeze with negative axis
-    # https://github.com/aesara-devs/aesara/issues/830
-    # mix_logp = at.squeeze(mix_logp, axis=-1)
-    mix_logp = at.squeeze(mix_logp, axis=mix_logp.ndim - 1)
-
     mix_logp = check_parameters(
         mix_logp,
         0 <= weights,
@@ -420,12 +411,6 @@ def marginal_mixture_logcdf(op, value, rng, weights, *components, **kwargs):
         )
 
     mix_logcdf = at.logsumexp(at.log(weights) + components_logcdf, axis=-1)
-
-    # Squeeze stack dimension
-    # There is a Aesara bug in squeeze with negative axis
-    # https://github.com/aesara-devs/aesara/issues/830
-    # mix_logp = at.squeeze(mix_logp, axis=-1)
-    mix_logcdf = at.squeeze(mix_logcdf, axis=mix_logcdf.ndim - 1)
 
     mix_logcdf = check_parameters(
         mix_logcdf,
@@ -470,7 +455,7 @@ allowed_default_mixture_transforms = (
     transforms.LogExpM1,
     transforms.LogOddsTransform,
     transforms.Ordered,
-    transforms.Simplex,
+    transforms.SimplexTransform,
     transforms.SumTo1,
 )
 

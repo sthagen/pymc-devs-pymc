@@ -19,8 +19,7 @@ import numpy as np
 import pytest
 import scipy.stats as st
 
-from aeppl.transforms import IntervalTransform, LogTransform
-from aeppl.transforms import Simplex as SimplexTransform
+from aeppl.transforms import IntervalTransform, LogTransform, SimplexTransform
 from aesara import tensor as at
 from aesara.tensor import TensorVariable
 from aesara.tensor.random.op import RandomVariable
@@ -584,7 +583,7 @@ class TestMixture(SeededTest):
         assert prior["mu0"].shape == (n_samples, D)
         assert prior["chol_cov_0"].shape == (n_samples, D * (D + 1) // 2)
 
-    @pytest.mark.xfail(reason="Mixture from single component not refactored yet")
+    @pytest.mark.xfail(reason="Nested mixtures not refactored yet")
     def test_nested_mixture(self):
         if aesara.config.floatX == "float32":
             rtol = 1e-4

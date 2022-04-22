@@ -3381,6 +3381,18 @@ class TestCensored:
         new_dist = pm.Censored.change_size(base_dist, (4,), expand=True)
         assert new_dist.eval().shape == (4, 3, 2)
 
+    def test_dist_broadcasted_by_lower_upper(self):
+        x = pm.Censored.dist(pm.Normal.dist(), lower=np.zeros((2,)), upper=None)
+        assert tuple(x.owner.inputs[0].shape.eval()) == (2,)
+
+        x = pm.Censored.dist(pm.Normal.dist(), lower=np.zeros((2,)), upper=np.zeros((4, 2)))
+        assert tuple(x.owner.inputs[0].shape.eval()) == (4, 2)
+
+        x = pm.Censored.dist(
+            pm.Normal.dist(size=(3, 4, 2)), lower=np.zeros((2,)), upper=np.zeros((4, 2))
+        )
+        assert tuple(x.owner.inputs[0].shape.eval()) == (3, 4, 2)
+
 
 class TestLKJCholeskCov:
     def test_dist(self):
@@ -3425,8 +3437,18 @@ class TestLKJCholeskCov:
             pm.MvNormal.dist(np.ones(3), np.eye(3)),
         ],
     )
-    def test_sd_dist_automatically_resized(self, sd_dist):
-        x = pm.LKJCholeskyCov.dist(n=3, eta=1, sd_dist=sd_dist, size=10, compute_corr=False)
+    @pytest.mark.parametrize(
+        "size, shape",
+        [
+            ((10,), None),
+            (None, (10, 6)),
+            (None, (10, ...)),
+        ],
+    )
+    def test_sd_dist_automatically_resized(self, sd_dist, size, shape):
+        x = pm.LKJCholeskyCov.dist(
+            n=3, eta=1, sd_dist=sd_dist, size=size, shape=shape, compute_corr=False
+        )
         resized_sd_dist = x.owner.inputs[-1]
         assert resized_sd_dist.eval().shape == (10, 3)
         # LKJCov has support shape `(n * (n+1)) // 2`
