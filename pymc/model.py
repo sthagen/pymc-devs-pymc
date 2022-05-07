@@ -50,10 +50,10 @@ from aesara.tensor.var import TensorVariable
 
 from pymc.aesaraf import (
     compile_pymc,
+    convert_observed_data,
     gradient,
     hessian,
     inputvars,
-    pandas_to_array,
     rvs_to_value_vars,
 )
 from pymc.blocking import DictToArrayBijection, RaveledVars
@@ -1158,7 +1158,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
 
         if isinstance(values, list):
             values = np.array(values)
-        values = pandas_to_array(values)
+        values = convert_observed_data(values)
         dims = self.RV_dims.get(name, None) or ()
         coords = coords or {}
 
@@ -1290,7 +1290,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
 
         """
         name = rv_var.name
-        data = pandas_to_array(data).astype(rv_var.dtype)
+        data = convert_observed_data(data).astype(rv_var.dtype)
 
         if data.ndim != rv_var.ndim:
             raise ShapeError(
@@ -1363,13 +1363,9 @@ class Model(WithMemoization, metaclass=ContextMeta):
             # size of the masked and unmasked array happened to coincide
             _, size, _, *inps = observed_rv_var.owner.inputs
             rng = self.model.next_rng()
-            observed_rv_var = observed_rv_var.owner.op(*inps, size=size, rng=rng)
-            # Add default_update to new rng
-            new_rng = observed_rv_var.owner.outputs[0]
-            observed_rv_var.update = (rng, new_rng)
-            rng.default_update = new_rng
-            observed_rv_var.name = f"{name}_observed"
-
+            observed_rv_var = observed_rv_var.owner.op(
+                *inps, size=size, rng=rng, name=f"{name}_observed"
+            )
             observed_rv_var.tag.observations = nonmissing_data
 
             self.create_value_var(observed_rv_var, transform=None, value_var=nonmissing_data)

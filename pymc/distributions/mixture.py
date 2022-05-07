@@ -21,7 +21,7 @@ from aeppl.abstract import MeasurableVariable, _get_measurable_outputs
 from aeppl.logprob import _logcdf, _logprob
 from aeppl.transforms import IntervalTransform
 from aesara.compile.builders import OpFromGraph
-from aesara.graph.basic import equal_computations
+from aesara.graph.basic import Node, equal_computations
 from aesara.tensor import TensorVariable
 from aesara.tensor.random.op import RandomVariable
 
@@ -30,7 +30,7 @@ from pymc.distributions import transforms
 from pymc.distributions.continuous import Normal, get_tau_sigma
 from pymc.distributions.dist_math import check_parameters
 from pymc.distributions.distribution import SymbolicDistribution, _moment, moment
-from pymc.distributions.logprob import logcdf, logp
+from pymc.distributions.logprob import ignore_logprob, logcdf, logp
 from pymc.distributions.shape_utils import to_tuple
 from pymc.distributions.transforms import _default_transform
 from pymc.util import check_dist_not_registered
@@ -43,6 +43,10 @@ class MarginalMixtureRV(OpFromGraph):
     """A placeholder used to specify a log-likelihood for a mixture sub-graph."""
 
     default_output = 1
+
+    def update(self, node: Node):
+        # Update for the internal mix_indexes RV
+        return {node.inputs[0]: node.outputs[0]}
 
 
 MeasurableVariable.register(MarginalMixtureRV)
@@ -66,11 +70,14 @@ class Mixture(SymbolicDistribution):
     w : tensor_like of float
         w >= 0 and w <= 1
         the mixture weights
-    comp_dists : iterable of PyMC distributions or single batched distribution
-        Distributions should be created via the `.dist()` API. If single distribution is
-        passed, the last size dimension (not shape) determines the number of mixture
+    comp_dists : iterable of unnamed distributions or single batched distribution
+        Distributions should be created via the `.dist()` API. If a single distribution
+        is passed, the last size dimension (not shape) determines the number of mixture
         components (e.g. `pm.Poisson.dist(..., size=components)`)
         :math:`f_1, \ldots, f_n`
+
+        .. warning:: comp_dists will be cloned, rendering them independent of the ones passed as input.
+
 
     Examples
     --------
@@ -199,6 +206,18 @@ class Mixture(SymbolicDistribution):
         return super().dist([w, *comp_dists], **kwargs)
 
     @classmethod
+    def num_rngs(cls, w, comp_dists, **kwargs):
+        if not isinstance(comp_dists, (tuple, list)):
+            # comp_dists is a single component
+            comp_dists = [comp_dists]
+        return len(comp_dists) + 1
+
+    @classmethod
+    def ndim_supp(cls, weights, *components):
+        # We already checked that all components have the same support dimensionality
+        return components[0].owner.op.ndim_supp
+
+    @classmethod
     def rv_op(cls, weights, *components, size=None, rngs=None):
         # Update rngs if provided
         if rngs is not None:
@@ -249,6 +268,10 @@ class Mixture(SymbolicDistribution):
 
         assert weights_ndim_batch == 0
 
+        # Component RVs terms are accounted by the Mixture logprob, so they can be
+        # safely ignored by Aeppl
+        components = [ignore_logprob(component) for component in components]
+
         # Create a OpFromGraph that encapsulates the random generating process
         # Create dummy input variables with the same type as the ones provided
         weights_ = weights.type()
@@ -287,19 +310,10 @@ class Mixture(SymbolicDistribution):
         # Create the actual MarginalMixture variable
         mix_out = mix_op(mix_indexes_rng, weights, *components)
 
-        # We need to set_default_updates ourselves, because the choices RV is hidden
-        # inside OpFromGraph and PyMC will never find it otherwise
-        mix_indexes_rng.default_update = mix_out.owner.outputs[0]
-
         # Reference nodes to facilitate identification in other classmethods
         mix_out.tag.weights = weights
         mix_out.tag.components = components
         mix_out.tag.choices_rng = mix_indexes_rng
-
-        # Component RVs terms are accounted by the Mixture logprob, so they can be
-        # safely ignore by Aeppl (this tag prevents UserWarning)
-        for component in components:
-            component.tag.ignore_logprob = True
 
         return mix_out
 
@@ -328,11 +342,6 @@ class Mixture(SymbolicDistribution):
         return [change_rv_size(component, size) for component in components]
 
     @classmethod
-    def ndim_supp(cls, weights, *components):
-        # We already checked that all components have the same support dimensionality
-        return components[0].owner.op.ndim_supp
-
-    @classmethod
     def change_size(cls, rv, new_size, expand=False):
         weights = rv.tag.weights
         components = rv.tag.components
@@ -352,14 +361,6 @@ class Mixture(SymbolicDistribution):
         components = cls._resize_components(new_size, *components)
 
         return cls.rv_op(weights, *components, rngs=rngs, size=None)
-
-    @classmethod
-    def graph_rvs(cls, rv):
-        # We return rv, which is itself a pseudo RandomVariable, that contains a
-        # mix_indexes_ RV in its inner graph. We want super().dist() to generate
-        # (components + 1) rngs for us, and it will do so based on how many elements
-        # we return here
-        return (*rv.tag.components, rv)
 
 
 @_get_measurable_outputs.register(MarginalMixtureRV)

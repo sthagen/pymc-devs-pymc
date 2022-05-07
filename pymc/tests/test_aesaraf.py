@@ -22,7 +22,9 @@ import numpy.testing as npt
 import pytest
 import scipy.sparse as sps
 
+from aeppl.abstract import MeasurableVariable
 from aeppl.logprob import ParameterValueError
+from aesara.compile.builders import OpFromGraph
 from aesara.graph.basic import Constant, Variable, ancestors, equal_computations
 from aesara.tensor.random.basic import normal, uniform
 from aesara.tensor.random.op import RandomVariable
@@ -36,8 +38,8 @@ from pymc.aesaraf import (
     _conversion_map,
     change_rv_size,
     compile_pymc,
+    convert_observed_data,
     extract_obs_data,
-    pandas_to_array,
     rvs_to_value_vars,
     take_along_axis,
     walk_model,
@@ -411,9 +413,9 @@ def test_extract_obs_data():
 
 
 @pytest.mark.parametrize("input_dtype", ["int32", "int64", "float32", "float64"])
-def test_pandas_to_array(input_dtype):
+def test_convert_observed_data(input_dtype):
     """
-    Ensure that pandas_to_array returns the dense array, masked array,
+    Ensure that convert_observed_data returns the dense array, masked array,
     graph variable, TensorVariable, or sparse matrix as appropriate.
     """
     pd = pytest.importorskip("pandas")
@@ -435,7 +437,7 @@ def test_pandas_to_array(input_dtype):
     square_generator = (np.array([i**2], dtype=int) for i in range(100))
 
     # Alias the function to be tested
-    func = pandas_to_array
+    func = convert_observed_data
 
     #####
     # Perform the various tests
@@ -494,7 +496,7 @@ def test_pandas_to_array(input_dtype):
 def test_pandas_to_array_pandas_index():
     pd = pytest.importorskip("pandas")
     data = pd.Index([1, 2, 3])
-    result = pandas_to_array(data)
+    result = convert_observed_data(data)
     expected = np.array([1, 2, 3])
     np.testing.assert_array_equal(result, expected)
 
@@ -596,91 +598,109 @@ def test_rvs_to_value_vars_nested():
         assert equal_computations(before, after)
 
 
-def test_check_bounds_flag():
-    """Test that CheckParameterValue Ops are replaced or removed when using compile_pymc"""
-    logp = at.ones(3)
-    cond = np.array([1, 0, 1])
-    bound = check_parameters(logp, cond)
+class TestCompilePyMC:
+    def test_check_bounds_flag(self):
+        """Test that CheckParameterValue Ops are replaced or removed when using compile_pymc"""
+        logp = at.ones(3)
+        cond = np.array([1, 0, 1])
+        bound = check_parameters(logp, cond)
 
-    with pm.Model() as m:
-        pass
+        with pm.Model() as m:
+            pass
 
-    with pytest.raises(ParameterValueError):
-        aesara.function([], bound)()
+        with pytest.raises(ParameterValueError):
+            aesara.function([], bound)()
 
-    m.check_bounds = False
-    with m:
-        assert np.all(compile_pymc([], bound)() == 1)
+        m.check_bounds = False
+        with m:
+            assert np.all(compile_pymc([], bound)() == 1)
 
-    m.check_bounds = True
-    with m:
-        assert np.all(compile_pymc([], bound)() == -np.inf)
+        m.check_bounds = True
+        with m:
+            assert np.all(compile_pymc([], bound)() == -np.inf)
 
+    def test_compile_pymc_sets_rng_updates(self):
+        rng = aesara.shared(np.random.default_rng(0))
+        x = pm.Normal.dist(rng=rng)
+        assert x.owner.inputs[0] is rng
+        f = compile_pymc([], x)
+        assert not np.isclose(f(), f())
 
-def test_compile_pymc_sets_rng_updates():
-    rng = aesara.shared(np.random.default_rng(0))
-    x = pm.Normal.dist(rng=rng)
-    assert x.owner.inputs[0] is rng
-    f = compile_pymc([], x)
-    assert not np.isclose(f(), f())
+        # Check that update was not done inplace
+        assert not hasattr(rng, "default_update")
+        f = aesara.function([], x)
+        assert f() == f()
 
-    # Check that update was not done inplace
-    assert not hasattr(rng, "default_update")
-    f = aesara.function([], x)
-    assert f() == f()
+    def test_compile_pymc_with_updates(self):
+        x = aesara.shared(0)
+        f = compile_pymc([], x, updates={x: x + 1})
+        assert f() == 0
+        assert f() == 1
 
+    def test_compile_pymc_missing_default_explicit_updates(self):
+        rng = aesara.shared(np.random.default_rng(0))
+        x = pm.Normal.dist(rng=rng)
 
-def test_compile_pymc_with_updates():
-    x = aesara.shared(0)
-    f = compile_pymc([], x, updates={x: x + 1})
-    assert f() == 0
-    assert f() == 1
+        # By default, compile_pymc should update the rng of x
+        f = compile_pymc([], x)
+        assert f() != f()
 
+        # An explicit update should override the default_update, like aesara.function does
+        # For testing purposes, we use an update that leaves the rng unchanged
+        f = compile_pymc([], x, updates={rng: rng})
+        assert f() == f()
 
-def test_compile_pymc_missing_default_explicit_updates():
-    rng = aesara.shared(np.random.default_rng(0))
-    x = pm.Normal.dist(rng=rng)
+        # If we specify a custom default_update directly it should use that instead.
+        rng.default_update = rng
+        f = compile_pymc([], x)
+        assert f() == f()
 
-    # By default, compile_pymc should update the rng of x
-    f = compile_pymc([], x)
-    assert f() != f()
+        # And again, it should be overridden by an explicit update
+        f = compile_pymc([], x, updates={rng: x.owner.outputs[0]})
+        assert f() != f()
 
-    # An explicit update should override the default_update, like aesara.function does
-    # For testing purposes, we use an update that leaves the rng unchanged
-    f = compile_pymc([], x, updates={rng: rng})
-    assert f() == f()
+    def test_compile_pymc_updates_inputs(self):
+        """Test that compile_pymc does not include rngs updates of variables that are inputs
+        or ancestors to inputs
+        """
+        x = at.random.normal()
+        y = at.random.normal(x)
+        z = at.random.normal(y)
 
-    # If we specify a custom default_update directly it should use that instead.
-    rng.default_update = rng
-    f = compile_pymc([], x)
-    assert f() == f()
+        for inputs, rvs_in_graph in (
+            ([], 3),
+            ([x], 2),
+            ([y], 1),
+            ([z], 0),
+            ([x, y], 1),
+            ([x, y, z], 0),
+        ):
+            fn = compile_pymc(inputs, z, on_unused_input="ignore")
+            fn_fgraph = fn.maker.fgraph
+            # Each RV adds a shared input for its rng
+            assert len(fn_fgraph.inputs) == len(inputs) + rvs_in_graph
+            # If the output is an input, the graph has a DeepCopyOp
+            assert len(fn_fgraph.apply_nodes) == max(rvs_in_graph, 1)
+            # Each RV adds a shared output for its rng
+            assert len(fn_fgraph.outputs) == 1 + rvs_in_graph
 
-    # And again, it should be overridden by an explicit update
-    f = compile_pymc([], x, updates={rng: x.owner.outputs[0]})
-    assert f() != f()
+    def test_compile_pymc_custom_update_op(self):
+        """Test that custom MeasurableVariable Op updates are used by compile_pymc"""
 
+        class UnmeasurableOp(OpFromGraph):
+            def update(self, node):
+                return {node.inputs[0]: node.inputs[0] + 1}
 
-def test_compile_pymc_updates_inputs():
-    """Test that compile_pymc does not include rngs updates of variables that are inputs
-    or ancestors to inputs
-    """
-    x = at.random.normal()
-    y = at.random.normal(x)
-    z = at.random.normal(y)
+        dummy_inputs = [at.scalar(), at.scalar()]
+        dummy_outputs = [at.add(*dummy_inputs)]
+        dummy_x = UnmeasurableOp(dummy_inputs, dummy_outputs)(aesara.shared(1.0), 1.0)
 
-    for inputs, rvs_in_graph in (
-        ([], 3),
-        ([x], 2),
-        ([y], 1),
-        ([z], 0),
-        ([x, y], 1),
-        ([x, y, z], 0),
-    ):
-        fn = compile_pymc(inputs, z, on_unused_input="ignore")
-        fn_fgraph = fn.maker.fgraph
-        # Each RV adds a shared input for its rng
-        assert len(fn_fgraph.inputs) == len(inputs) + rvs_in_graph
-        # If the output is an input, the graph has a DeepCopyOp
-        assert len(fn_fgraph.apply_nodes) == max(rvs_in_graph, 1)
-        # Each RV adds a shared output for its rng
-        assert len(fn_fgraph.outputs) == 1 + rvs_in_graph
+        # Check that there are no updates at first
+        fn = compile_pymc(inputs=[], outputs=dummy_x)
+        assert fn() == fn() == 2.0
+
+        # And they are enabled once the Op is registered as Measurable
+        MeasurableVariable.register(UnmeasurableOp)
+        fn = compile_pymc(inputs=[], outputs=dummy_x)
+        assert fn() == 2.0
+        assert fn() == 3.0
