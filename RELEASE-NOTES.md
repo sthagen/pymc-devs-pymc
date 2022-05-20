@@ -25,11 +25,14 @@ Also check out the [milestones](https://github.com/pymc-devs/pymc/milestones) fo
 
 All of the above apply to:
 
-Signature and default parameters changed for several distributions (see [#5628](https://github.com/pymc-devs/pymc/pull/5628)):
-    - `pm.StudentT` now requires either `sigma` or `lam` as kwarg
-    - `pm.StudentT` now requires `nu` to be specified (no longer defaults to 1)
-    - `pm.AsymmetricLaplace` positional arguments re-ordered
-    - `pm.AsymmetricLaplace` now requires `mu` to be specified (no longer defaults to 0)
+Signature and default parameters changed for several distributions:
+    - `pm.StudentT` now requires either `sigma` or `lam` as kwarg (see [#5628](https://github.com/pymc-devs/pymc/pull/5628))
+    - `pm.StudentT` now requires `nu` to be specified (no longer defaults to 1) (see [#5628](https://github.com/pymc-devs/pymc/pull/5628))
+    - `pm.AsymmetricLaplace` positional arguments re-ordered (see [#5628](https://github.com/pymc-devs/pymc/pull/5628))
+    - `pm.AsymmetricLaplace` now requires `mu` to be specified (no longer defaults to 0) (see [#5628](https://github.com/pymc-devs/pymc/pull/5628))
+    - `ZeroInflatedPoisson` `theta` parameter was renamed to `mu` (see [#5584](https://github.com/pymc-devs/pymc/pull/5584)).
+    - `pm.GaussianRandomWalk` initial distribution defaults to unit normal instead of flat (see[#5779](https://github.com/pymc-devs/pymc/pull/5779))
+    - `pm.AR` initial distribution defaults to unit normal instead of flat (see[#5779](https://github.com/pymc-devs/pymc/pull/5779))
 - BART was removed [#5566](https://github.com/pymc-devs/pymc/pull/5566). It is now available from [pymc-experimental](https://github.com/pymc-devs/pymc-experimental)
 - The `pm.EllipticalSlice` sampler was removed (see [#5756](https://github.com/pymc-devs/pymc/issues/5756)).
 - `BaseStochasticGradient` was removed (see [#5630](https://github.com/pymc-devs/pymc/pull/5630))
@@ -80,7 +83,7 @@ Signature and default parameters changed for several distributions (see [#5628](
   - The function `replace_with_values` function has been added to `gp.utils`.
   - `MarginalSparse` has been renamed `MarginalApprox`.
   - Removed `MixtureSameFamily`. `Mixture` is now capable of handling batched multivariate components (see [#5438](https://github.com/pymc-devs/pymc/pull/5438)).
-  - `ZeroInflatedPoisson` `theta` parameter was renamed to `mu` (see [#5584](https://github.com/pymc-devs/pymc/pull/5584)).
+  - Removed `AR1`, `AR` of order 1 should be used instead. (see [5734](https://github.com/pymc-devs/pymc/pull/5734)).
 - ...
 
 ### Expected breaks
@@ -139,6 +142,7 @@ This includes API changes we did not warn about since at least `3.11.0` (2021-01
 - `pymc.sampling_jax` samplers support `log_likelihood`, `observed_data`, and `sample_stats` in returned InferenceData object (see [#5189](https://github.com/pymc-devs/pymc/pull/5189))
 - Adding support for `pm.Deterministic` in `pymc.sampling_jax` (see [#5182](https://github.com/pymc-devs/pymc/pull/5182))
 - Added an alternative parametrization, `logit_p` to `pm.Binomial` and `pm.Categorical` distributions (see [5637](https://github.com/pymc-devs/pymc/pull/5637)).
+- Added the low level `compile_forward_sampling_function` method to compile the aesara function responsible for generating forward samples (see [#5759](https://github.com/pymc-devs/pymc/pull/5759)).
 - ...
 
 

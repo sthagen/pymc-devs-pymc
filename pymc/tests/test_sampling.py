@@ -27,6 +27,7 @@ import scipy.special
 import xarray as xr
 
 from aesara import Mode, shared
+from aesara.compile import SharedVariable
 from arviz import InferenceData
 from arviz import from_dict as az_from_dict
 from arviz.tests.helpers import check_multiple_attrs
@@ -38,6 +39,7 @@ from pymc.aesaraf import compile_pymc
 from pymc.backends.base import MultiTrace
 from pymc.backends.ndarray import NDArray
 from pymc.exceptions import IncorrectArgumentsError, SamplingError
+from pymc.sampling import compile_forward_sampling_function
 from pymc.tests.helpers import SeededTest, fast_unstable_sampling_mode
 from pymc.tests.models import simple_init
 
@@ -60,12 +62,61 @@ class TestSample(SeededTest):
         super().setup_method()
         self.model, self.start, self.step, _ = simple_init()
 
+    @pytest.mark.parametrize("init", ("jitter+adapt_diag", "advi", "map"))
+    @pytest.mark.parametrize("cores", (1, 2))
+    @pytest.mark.parametrize(
+        "chains, seeds",
+        [
+            (1, None),
+            (1, 1),
+            (1, [1]),
+            (2, None),
+            (2, 1),
+            (2, [1, 2]),
+        ],
+    )
+    def test_random_seed(self, chains, seeds, cores, init):
+        with pm.Model(rng_seeder=3):
+            x = pm.Normal("x", 0, 10, initval="prior")
+            tr1 = pm.sample(
+                chains=chains,
+                random_seed=seeds,
+                cores=cores,
+                init=init,
+                tune=0,
+                draws=10,
+                return_inferencedata=False,
+                compute_convergence_checks=False,
+            )
+            tr2 = pm.sample(
+                chains=chains,
+                random_seed=seeds,
+                cores=cores,
+                init=init,
+                tune=0,
+                draws=10,
+                return_inferencedata=False,
+                compute_convergence_checks=False,
+            )
+
+        allequal = np.all(tr1["x"] == tr2["x"])
+        if seeds is None:
+            assert not allequal
+        # TODO: ADVI init methods are not correctly seeded, as they rely on the state of
+        #  the model RandomState/Generators which is updated in place when the function
+        #  is compiled and evaluated. This elif branch must be removed once this is fixed
+        elif init == "advi":
+            assert not allequal
+        else:
+            assert allequal
+
     def test_sample_does_not_set_seed(self):
+        # This tests that when random_seed is None, the global seed is not affected
         random_numbers = []
         for _ in range(2):
             np.random.seed(1)
             with self.model:
-                pm.sample(1, tune=0, chains=1)
+                pm.sample(1, tune=0, chains=1, random_seed=None)
                 random_numbers.append(np.random.random())
         assert random_numbers[0] == random_numbers[1]
 
@@ -534,13 +585,6 @@ class TestSamplePPC(SeededTest):
             _, pval = stats.kstest(ppc["a"] - trace["mu"], stats.norm(loc=0, scale=1).cdf)
             assert pval > 0.001
 
-        # size argument not introduced to fast version [2019/08/20:rpg]
-        with model:
-            ppc = pm.sample_posterior_predictive(
-                trace, size=5, var_names=["a"], return_inferencedata=False
-            )
-            assert ppc["a"].shape == (nchains * ndraws, 5)
-
     def test_normal_scalar_idata(self):
         nchains = 2
         ndraws = 500
@@ -597,13 +641,6 @@ class TestSamplePPC(SeededTest):
             assert "a" in ppc
             assert ppc["a"].shape == (12, 2)
 
-            # size unsupported by fast_ version  argument. [2019/08/19:rpg]
-            ppc = pm.sample_posterior_predictive(
-                trace, return_inferencedata=False, samples=10, var_names=["a"], size=4
-            )
-            assert "a" in ppc
-            assert ppc["a"].shape == (10, 4, 2)
-
     def test_normal_vector_idata(self, caplog):
         with pm.Model() as model:
             mu = pm.Normal("mu", 0.0, 1.0)
@@ -630,9 +667,6 @@ class TestSamplePPC(SeededTest):
             with pytest.raises(IncorrectArgumentsError):
                 ppc = pm.sample_posterior_predictive(idata, samples=10, keep_size=True)
 
-            with pytest.raises(IncorrectArgumentsError):
-                ppc = pm.sample_posterior_predictive(idata, size=4, keep_size=True)
-
             # test wrong type argument
             bad_trace = {"mu": stats.norm.rvs(size=1000)}
             with pytest.raises(TypeError, match="type for `trace`"):
@@ -655,12 +689,6 @@ class TestSamplePPC(SeededTest):
             )
             assert "a" in ppc
             assert ppc["a"].shape == (12, 2)
-
-            ppc = pm.sample_posterior_predictive(
-                idata, return_inferencedata=False, samples=10, var_names=["a"], size=4
-            )
-            assert "a" in ppc
-            assert ppc["a"].shape == (10, 4, 2)
 
     def test_sum_normal(self):
         with pm.Model() as model:
@@ -974,14 +1002,12 @@ def check_exec_nuts_init(method):
         assert isinstance(start, list)
         assert len(start) == 1
         assert isinstance(start[0], dict)
-        assert model.a.tag.value_var.name in start[0]
-        assert model.b.tag.value_var.name in start[0]
+        assert set(start[0].keys()) == {v.name for v in model.value_vars}
         start, _ = pm.init_nuts(init=method, n_init=10, chains=2, seeds=[1, 2])
         assert isinstance(start, list)
         assert len(start) == 2
         assert isinstance(start[0], dict)
-        assert model.a.tag.value_var.name in start[0]
-        assert model.b.tag.value_var.name in start[0]
+        assert set(start[0].keys()) == {v.name for v in model.value_vars}
 
 
 @pytest.mark.parametrize(
@@ -1446,3 +1472,207 @@ def test_no_init_nuts_compound(caplog):
         b = pm.Poisson("b", 1)
         pm.sample(10, tune=10)
         assert "Initializing NUTS" not in caplog.text
+
+
+class TestCompileForwardSampler:
+    @staticmethod
+    def get_function_roots(function):
+        return [
+            var
+            for var in aesara.graph.basic.graph_inputs(function.maker.fgraph.outputs)
+            if var.name
+        ]
+
+    @staticmethod
+    def get_function_inputs(function):
+        return {i for i in function.maker.fgraph.inputs if not isinstance(i, SharedVariable)}
+
+    def test_linear_model(self):
+        with pm.Model() as model:
+            x = pm.MutableData("x", np.linspace(0, 1, 10))
+            y = pm.MutableData("y", np.ones(10))
+
+            alpha = pm.Normal("alpha", 0, 0.1)
+            beta = pm.Normal("beta", 0, 0.1)
+            mu = pm.Deterministic("mu", alpha + beta * x)
+            sigma = pm.HalfNormal("sigma", 0.1)
+            obs = pm.Normal("obs", mu, sigma, observed=y)
+
+        f = compile_forward_sampling_function(
+            [obs],
+            vars_in_trace=[alpha, beta, sigma, mu],
+            basic_rvs=model.basic_RVs,
+        )
+        assert {i.name for i in self.get_function_inputs(f)} == {"alpha", "beta", "sigma"}
+        assert {i.name for i in self.get_function_roots(f)} == {"x", "alpha", "beta", "sigma"}
+
+        with pm.Model() as model:
+            x = pm.ConstantData("x", np.linspace(0, 1, 10))
+            y = pm.MutableData("y", np.ones(10))
+
+            alpha = pm.Normal("alpha", 0, 0.1)
+            beta = pm.Normal("beta", 0, 0.1)
+            mu = pm.Deterministic("mu", alpha + beta * x)
+            sigma = pm.HalfNormal("sigma", 0.1)
+            obs = pm.Normal("obs", mu, sigma, observed=y)
+
+        f = compile_forward_sampling_function(
+            [obs],
+            vars_in_trace=[alpha, beta, sigma, mu],
+            basic_rvs=model.basic_RVs,
+        )
+        assert {i.name for i in self.get_function_inputs(f)} == {"alpha", "beta", "sigma", "mu"}
+        assert {i.name for i in self.get_function_roots(f)} == {"mu", "sigma"}
+
+    def test_nested_observed_model(self):
+        with pm.Model() as model:
+            p = pm.ConstantData("p", np.array([0.25, 0.5, 0.25]))
+            x = pm.MutableData("x", np.zeros(10))
+            y = pm.MutableData("y", np.ones(10))
+
+            category = pm.Categorical("category", p, observed=x)
+            beta = pm.Normal("beta", 0, 0.1, size=p.shape)
+            mu = pm.Deterministic("mu", beta[category])
+            sigma = pm.HalfNormal("sigma", 0.1)
+            pm.Normal("obs", mu, sigma, observed=y)
+
+        f = compile_forward_sampling_function(
+            outputs=model.observed_RVs,
+            vars_in_trace=[beta, mu, sigma],
+            basic_rvs=model.basic_RVs,
+        )
+        assert {i.name for i in self.get_function_inputs(f)} == {"beta", "sigma"}
+        assert {i.name for i in self.get_function_roots(f)} == {"x", "p", "beta", "sigma"}
+
+        f = compile_forward_sampling_function(
+            outputs=model.observed_RVs,
+            vars_in_trace=[beta, mu, sigma],
+            basic_rvs=model.basic_RVs,
+            givens_dict={category: np.zeros(10, dtype=category.dtype)},
+        )
+        assert {i.name for i in self.get_function_inputs(f)} == {"beta", "sigma"}
+        assert {i.name for i in self.get_function_roots(f)} == {
+            "x",
+            "p",
+            "category",
+            "beta",
+            "sigma",
+        }
+
+    def test_volatile_parameters(self):
+        with pm.Model() as model:
+            y = pm.MutableData("y", np.ones(10))
+            mu = pm.Normal("mu", 0, 1)
+            nested_mu = pm.Normal("nested_mu", mu, 1, size=10)
+            sigma = pm.HalfNormal("sigma", 1)
+            pm.Normal("obs", nested_mu, sigma, observed=y)
+
+        f = compile_forward_sampling_function(
+            outputs=model.observed_RVs,
+            vars_in_trace=[nested_mu, sigma],  # mu isn't in the trace and will be deemed volatile
+            basic_rvs=model.basic_RVs,
+        )
+        assert {i.name for i in self.get_function_inputs(f)} == {"sigma"}
+        assert {i.name for i in self.get_function_roots(f)} == {"sigma"}
+
+        f = compile_forward_sampling_function(
+            outputs=model.observed_RVs,
+            vars_in_trace=[mu, nested_mu, sigma],
+            basic_rvs=model.basic_RVs,
+            givens_dict={
+                mu: np.array(1.0)
+            },  # mu will be considered volatile because it's in givens
+        )
+        assert {i.name for i in self.get_function_inputs(f)} == {"sigma"}
+        assert {i.name for i in self.get_function_roots(f)} == {"mu", "sigma"}
+
+    def test_distributions_op_from_graph(self):
+        with pm.Model() as model:
+            w = pm.Dirichlet("w", a=np.ones(3), size=(5, 3))
+
+            mu = pm.Normal("mu", mu=np.arange(3), sigma=1)
+
+            components = pm.Normal.dist(mu=mu, sigma=1, size=w.shape)
+            mix_mu = pm.Mixture("mix_mu", w=w, comp_dists=components)
+            obs = pm.Normal("obs", mix_mu, 1, observed=np.ones((5, 3)))
+
+        f = compile_forward_sampling_function(
+            outputs=[obs],
+            vars_in_trace=[mix_mu, mu, w],
+            basic_rvs=model.basic_RVs,
+        )
+        assert {i.name for i in self.get_function_inputs(f)} == {"w", "mu", "mix_mu"}
+        assert {i.name for i in self.get_function_roots(f)} == {"mix_mu"}
+
+        f = compile_forward_sampling_function(
+            outputs=[obs],
+            vars_in_trace=[mu, w],
+            basic_rvs=model.basic_RVs,
+        )
+        assert {i.name for i in self.get_function_inputs(f)} == {"w", "mu"}
+        assert {i.name for i in self.get_function_roots(f)} == {"w", "mu"}
+
+        f = compile_forward_sampling_function(
+            outputs=[obs],
+            vars_in_trace=[mix_mu, mu],
+            basic_rvs=model.basic_RVs,
+        )
+        assert {i.name for i in self.get_function_inputs(f)} == {"mu"}
+        assert {i.name for i in self.get_function_roots(f)} == {"mu"}
+
+    def test_distributions_no_op_from_graph(self):
+        with pm.Model() as model:
+            latent_mu = pm.Normal("latent_mu", mu=np.arange(3), sigma=1)
+            mu = pm.Censored("mu", pm.Normal.dist(mu=latent_mu, sigma=1), lower=-1, upper=1)
+            obs = pm.Normal("obs", mu, 1, observed=np.ones((10, 3)))
+
+        f = compile_forward_sampling_function(
+            outputs=[obs],
+            vars_in_trace=[latent_mu, mu],
+            basic_rvs=model.basic_RVs,
+        )
+        assert {i.name for i in self.get_function_inputs(f)} == {"latent_mu", "mu"}
+        assert {i.name for i in self.get_function_roots(f)} == {"mu"}
+
+        f = compile_forward_sampling_function(
+            outputs=[obs],
+            vars_in_trace=[mu],
+            basic_rvs=model.basic_RVs,
+        )
+        assert {i.name for i in self.get_function_inputs(f)} == set()
+        assert {i.name for i in self.get_function_roots(f)} == set()
+
+    def test_lkj_cholesky_cov(self):
+        with pm.Model() as model:
+            mu = np.zeros(3)
+            sd_dist = pm.Exponential.dist(1.0, size=3)
+            chol, corr, stds = pm.LKJCholeskyCov(  # pylint: disable=unpacking-non-sequence
+                "chol_packed", n=3, eta=2, sd_dist=sd_dist, compute_corr=True
+            )
+            chol_packed = model["chol_packed"]
+            chol = pm.Deterministic("chol", chol)
+            obs = pm.MvNormal("obs", mu=mu, chol=chol, observed=np.zeros(3))
+
+        f = compile_forward_sampling_function(
+            outputs=[obs],
+            vars_in_trace=[chol_packed, chol],
+            basic_rvs=model.basic_RVs,
+        )
+        assert {i.name for i in self.get_function_inputs(f)} == {"chol_packed", "chol"}
+        assert {i.name for i in self.get_function_roots(f)} == {"chol"}
+
+        f = compile_forward_sampling_function(
+            outputs=[obs],
+            vars_in_trace=[chol_packed],
+            basic_rvs=model.basic_RVs,
+        )
+        assert {i.name for i in self.get_function_inputs(f)} == {"chol_packed"}
+        assert {i.name for i in self.get_function_roots(f)} == {"chol_packed"}
+
+        f = compile_forward_sampling_function(
+            outputs=[obs],
+            vars_in_trace=[chol],
+            basic_rvs=model.basic_RVs,
+        )
+        assert {i.name for i in self.get_function_inputs(f)} == set()
+        assert {i.name for i in self.get_function_roots(f)} == set()
