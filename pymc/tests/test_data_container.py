@@ -19,7 +19,7 @@ import pytest
 
 from aesara import shared
 from aesara.compile.sharedvalue import SharedVariable
-from aesara.tensor.sharedvar import ScalarSharedVariable
+from aesara.tensor import TensorConstant
 from aesara.tensor.var import TensorVariable
 
 import pymc as pm
@@ -315,22 +315,39 @@ class TestData(SeededTest):
         }
         # pass coordinates explicitly, use numpy array in Data container
         with pm.Model(coords=coords) as pmodel:
+            # Dims created from coords are constant by default
+            assert isinstance(pmodel.dim_lengths["rows"], TensorConstant)
+            assert isinstance(pmodel.dim_lengths["columns"], TensorConstant)
             pm.MutableData("observations", data, dims=("rows", "columns"))
-            # new data with same shape
+            # new data with same (!) shape
             pm.set_data({"observations": data + 1})
-            # new data with same shape and coords
+            # new data with same (!) shape and coords
             pm.set_data({"observations": data}, coords=coords)
         assert "rows" in pmodel.coords
         assert pmodel.coords["rows"] == ("R1", "R2", "R3", "R4", "R5")
         assert "rows" in pmodel.dim_lengths
-        assert isinstance(pmodel.dim_lengths["rows"], ScalarSharedVariable)
         assert pmodel.dim_lengths["rows"].eval() == 5
         assert "columns" in pmodel.coords
         assert pmodel.coords["columns"] == ("C1", "C2", "C3", "C4", "C5", "C6", "C7")
         assert pmodel.RV_dims == {"observations": ("rows", "columns")}
         assert "columns" in pmodel.dim_lengths
-        assert isinstance(pmodel.dim_lengths["columns"], ScalarSharedVariable)
         assert pmodel.dim_lengths["columns"].eval() == 7
+
+    def test_set_coords_through_pmdata(self):
+        with pm.Model() as pmodel:
+            pm.ConstantData(
+                "population", [100, 200], dims="city", coords={"city": ["Tinyvil", "Minitown"]}
+            )
+            pm.MutableData(
+                "temperature",
+                [[15, 20, 22, 17], [18, 22, 21, 12]],
+                dims=("city", "season"),
+                coords={"season": ["winter", "spring", "summer", "fall"]},
+            )
+        assert "city" in pmodel.coords
+        assert "season" in pmodel.coords
+        assert pmodel.coords["city"] == ("Tinyvil", "Minitown")
+        assert pmodel.coords["season"] == ("winter", "spring", "summer", "fall")
 
     def test_symbolic_coords(self):
         """
@@ -338,6 +355,7 @@ class TestData(SeededTest):
         Their lengths are then automatically linked to the corresponding Tensor dimension.
         """
         with pm.Model() as pmodel:
+            # Dims created from MutableData are TensorVariables linked to the SharedVariable.shape
             intensity = pm.MutableData("intensity", np.ones((2, 3)), dims=("row", "column"))
             assert "row" in pmodel.dim_lengths
             assert "column" in pmodel.dim_lengths
