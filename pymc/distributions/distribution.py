@@ -19,7 +19,7 @@ import warnings
 
 from abc import ABCMeta
 from functools import singledispatch
-from typing import Callable, Iterable, Optional, Sequence, Tuple, Union, cast
+from typing import Callable, Optional, Sequence, Tuple, Union, cast
 
 import aesara
 import numpy as np
@@ -226,8 +226,8 @@ class Distribution(metaclass=DistributionMeta):
         transform : optional
             See ``Model.register_rv``.
         **kwargs
-            Keyword arguments that will be forwarded to ``.dist()``.
-            Most prominently: ``shape`` and ``size``
+            Keyword arguments that will be forwarded to ``.dist()`` or the Aesara RV Op.
+            Most prominently: ``shape`` for ``.dist()`` or ``dtype`` for the Op.
 
         Returns
         -------
@@ -258,13 +258,10 @@ class Distribution(metaclass=DistributionMeta):
         if not isinstance(name, string_types):
             raise TypeError(f"Name needs to be a string but got: {name}")
 
-        if rng is None:
-            rng = model.next_rng()
-
         # Create the RV and process dims and observed to determine
         # a shape by which the created RV may need to be resized.
         rv_out, dims, observed, resize_shape = _make_rv_and_resize_shape(
-            cls=cls, dims=dims, model=model, observed=observed, args=args, rng=rng, **kwargs
+            cls=cls, dims=dims, model=model, observed=observed, args=args, **kwargs
         )
 
         if resize_shape:
@@ -298,7 +295,6 @@ class Distribution(metaclass=DistributionMeta):
         dist_params,
         *,
         shape: Optional[Shape] = None,
-        size: Optional[Size] = None,
         **kwargs,
     ) -> RandomVariable:
         """Creates a RandomVariable corresponding to the `cls` distribution.
@@ -312,8 +308,9 @@ class Distribution(metaclass=DistributionMeta):
 
             An Ellipsis (...) may be inserted in the last position to short-hand refer to
             all the dimensions that the RV would get if no shape/size/dims were passed at all.
-        size : int, tuple, Variable, optional
-            For creating the RV like in Aesara/NumPy.
+        **kwargs
+            Keyword arguments that will be forwarded to the Aesara RV Op.
+            Most prominently: ``size`` or ``dtype``.
 
         Returns
         -------
@@ -337,6 +334,7 @@ class Distribution(metaclass=DistributionMeta):
 
         if "dims" in kwargs:
             raise NotImplementedError("The use of a `.dist(dims=...)` API is not supported.")
+        size = kwargs.pop("size", None)
         if shape is not None and size is not None:
             raise ValueError(
                 f"Passing both `shape` ({shape}) and `size` ({size}) is not supported!"
@@ -383,9 +381,6 @@ class SymbolicDistribution:
         to a canonical parametrization. It should call `super().dist()`, passing a
         list with the default parameters as the first and only non keyword argument,
         followed by other keyword arguments like size and rngs, and return the result
-    cls.num_rngs
-        Returns the number of rngs given the same arguments passed by the user when
-        calling the distribution
     cls.ndim_supp
         Returns the support of the symbolic distribution, given the default set of
         parameters. This may not always be constant, for instance if the symbolic
@@ -402,7 +397,6 @@ class SymbolicDistribution:
         cls,
         name: str,
         *args,
-        rngs: Optional[Iterable] = None,
         dims: Optional[Dims] = None,
         initval=None,
         observed=None,
@@ -419,8 +413,6 @@ class SymbolicDistribution:
             A distribution class that inherits from SymbolicDistribution.
         name : str
             Name for the new model variable.
-        rngs : optional
-            Random number generator to use for the RandomVariable(s) in the graph.
         dims : tuple, optional
             A tuple of dimension names known to the model.
         initval : optional
@@ -468,17 +460,10 @@ class SymbolicDistribution:
         if not isinstance(name, string_types):
             raise TypeError(f"Name needs to be a string but got: {name}")
 
-        if rngs is None:
-            # Instead of passing individual RNG variables we could pass a RandomStream
-            # and let the classes create as many RNGs as they need
-            rngs = [model.next_rng() for _ in range(cls.num_rngs(*args, **kwargs))]
-        elif not isinstance(rngs, (list, tuple)):
-            rngs = [rngs]
-
         # Create the RV and process dims and observed to determine
         # a shape by which the created RV may need to be resized.
         rv_out, dims, observed, resize_shape = _make_rv_and_resize_shape(
-            cls=cls, dims=dims, model=model, observed=observed, args=args, rngs=rngs, **kwargs
+            cls=cls, dims=dims, model=model, observed=observed, args=args, **kwargs
         )
 
         if resize_shape:
