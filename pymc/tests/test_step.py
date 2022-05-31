@@ -60,6 +60,7 @@ from pymc.step_methods import (
 )
 from pymc.step_methods.mlda import extract_Q_estimate
 from pymc.tests.checks import close_to
+from pymc.tests.helpers import fast_unstable_sampling_mode
 from pymc.tests.models import (
     mv_simple,
     mv_simple_coarse,
@@ -78,46 +79,58 @@ class TestStepMethods:
         shutil.rmtree(self.temp_dir)
 
     def check_stat(self, check, idata, name):
-        if hasattr(idata, "warmup_posterior"):
-            group = idata.warmup_posterior
-        else:
-            group = idata.posterior
+        group = idata.posterior
         for (var, stat, value, bound) in check:
-            s = stat(group[var].sel(chain=0, draw=slice(2000, None)), axis=0)
-            close_to(s, value, bound)
+            s = stat(group[var].sel(chain=0), axis=0)
+            close_to(s, value, bound, name)
 
-    def test_step_continuous(self):
-        start, model, (mu, C) = mv_simple()
-        unc = np.diag(C) ** 0.5
-        check = (("x", np.mean, mu, unc / 10.0), ("x", np.std, unc, unc / 10.0))
-        _, model_coarse, _ = mv_simple_coarse()
-        with model:
-            steps = (
-                Slice(),
-                HamiltonianMC(scaling=C, is_cov=True, blocked=False),
-                NUTS(scaling=C, is_cov=True, blocked=False),
-                Metropolis(S=C, proposal_dist=MultivariateNormalProposal, blocked=True),
-                Slice(blocked=True),
-                HamiltonianMC(scaling=C, is_cov=True),
-                NUTS(scaling=C, is_cov=True),
-                CompoundStep(
+    @pytest.mark.parametrize(
+        "step_fn, draws",
+        [
+            (lambda C, _: HamiltonianMC(scaling=C, is_cov=True, blocked=False), 1000),
+            (lambda C, _: HamiltonianMC(scaling=C, is_cov=True), 1000),
+            (lambda C, _: NUTS(scaling=C, is_cov=True, blocked=False), 1000),
+            (lambda C, _: NUTS(scaling=C, is_cov=True), 1000),
+            (
+                lambda C, _: CompoundStep(
                     [
                         HamiltonianMC(scaling=C, is_cov=True),
                         HamiltonianMC(scaling=C, is_cov=True, blocked=False),
                     ]
                 ),
-                MLDA(
+                1000,
+            ),
+            # MLDA takes 1/2 of the total test time!
+            (
+                lambda C, model_coarse: MLDA(
                     coarse_models=[model_coarse],
                     base_S=C,
                     base_proposal_dist=MultivariateNormalProposal,
                 ),
-            )
-        for step in steps:
+                1000,
+            ),
+            (lambda *_: Slice(), 2000),
+            (lambda *_: Slice(blocked=True), 2000),
+            (
+                lambda C, _: Metropolis(
+                    S=C, proposal_dist=MultivariateNormalProposal, blocked=True
+                ),
+                4000,
+            ),
+        ],
+        ids=str,
+    )
+    def test_step_continuous(self, step_fn, draws):
+        start, model, (mu, C) = mv_simple()
+        unc = np.diag(C) ** 0.5
+        check = (("x", np.mean, mu, unc / 10), ("x", np.std, unc, unc / 10))
+        _, model_coarse, _ = mv_simple_coarse()
+        with model:
+            step = step_fn(C, model_coarse)
             idata = sample(
-                0,
-                tune=8000,
+                tune=1000,
+                draws=draws,
                 chains=1,
-                discard_tuned_samples=False,
                 step=step,
                 start=start,
                 model=model,
@@ -126,49 +139,58 @@ class TestStepMethods:
             self.check_stat(check, idata, step.__class__.__name__)
 
     def test_step_discrete(self):
-        if aesara.config.floatX == "float32":
-            return  # Cannot use @skip because it only skips one iteration of the yield
         start, model, (mu, C) = mv_simple_discrete()
         unc = np.diag(C) ** 0.5
         check = (("x", np.mean, mu, unc / 10.0), ("x", np.std, unc, unc / 10.0))
         with model:
-            steps = (Metropolis(S=C, proposal_dist=MultivariateNormalProposal),)
-        for step in steps:
+            step = Metropolis(S=C, proposal_dist=MultivariateNormalProposal)
             idata = sample(
-                20000, tune=0, step=step, start=start, model=model, random_seed=1, chains=1
+                tune=1000,
+                draws=2000,
+                chains=1,
+                step=step,
+                start=start,
+                model=model,
+                random_seed=1,
             )
             self.check_stat(check, idata, step.__class__.__name__)
 
-    def test_step_categorical(self):
+    @pytest.mark.parametrize("proposal", ["uniform", "proportional"])
+    def test_step_categorical(self, proposal):
         start, model, (mu, C) = simple_categorical()
         unc = C**0.5
         check = (("x", np.mean, mu, unc / 10.0), ("x", np.std, unc, unc / 10.0))
         with model:
-            steps = (
-                CategoricalGibbsMetropolis([model.x], proposal="uniform"),
-                CategoricalGibbsMetropolis([model.x], proposal="proportional"),
+            step = CategoricalGibbsMetropolis([model.x], proposal=proposal)
+            idata = sample(
+                tune=1000,
+                draws=2000,
+                chains=1,
+                step=step,
+                start=start,
+                model=model,
+                random_seed=1,
             )
-        for step in steps:
-            idata = sample(8000, tune=0, step=step, start=start, model=model, random_seed=1)
             self.check_stat(check, idata, step.__class__.__name__)
 
 
 class TestMetropolisProposal:
     def test_proposal_choice(self):
-        _, model, _ = mv_simple()
-        with model:
-            initial_point = model.initial_point()
-            initial_point_size = sum(initial_point[n.name].size for n in model.value_vars)
+        with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+            _, model, _ = mv_simple()
+            with model:
+                initial_point = model.initial_point()
+                initial_point_size = sum(initial_point[n.name].size for n in model.value_vars)
 
-            s = np.ones(initial_point_size)
-            sampler = Metropolis(S=s)
-            assert isinstance(sampler.proposal_dist, NormalProposal)
-            s = np.diag(s)
-            sampler = Metropolis(S=s)
-            assert isinstance(sampler.proposal_dist, MultivariateNormalProposal)
-            s[0, 0] = -s[0, 0]
-            with pytest.raises(np.linalg.LinAlgError):
+                s = np.ones(initial_point_size)
                 sampler = Metropolis(S=s)
+                assert isinstance(sampler.proposal_dist, NormalProposal)
+                s = np.diag(s)
+                sampler = Metropolis(S=s)
+                assert isinstance(sampler.proposal_dist, MultivariateNormalProposal)
+                s[0, 0] = -s[0, 0]
+                with pytest.raises(np.linalg.LinAlgError):
+                    sampler = Metropolis(S=s)
 
     def test_mv_proposal(self):
         np.random.seed(42)
@@ -182,26 +204,32 @@ class TestMetropolisProposal:
 class TestCompoundStep:
     samplers = (Metropolis, Slice, HamiltonianMC, NUTS, DEMetropolis)
 
-    @pytest.mark.skipif(
-        aesara.config.floatX == "float32", reason="Test fails on 32 bit due to linalg issues"
-    )
     def test_non_blocked(self):
         """Test that samplers correctly create non-blocked compound steps."""
-        _, model = simple_2model_continuous()
-        with model:
-            for sampler in self.samplers:
-                assert isinstance(sampler(blocked=False), CompoundStep)
+        with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+            _, model = simple_2model_continuous()
+            with model:
+                for sampler in self.samplers:
+                    assert isinstance(sampler(blocked=False), CompoundStep)
 
-    @pytest.mark.skipif(
-        aesara.config.floatX == "float32", reason="Test fails on 32 bit due to linalg issues"
-    )
     def test_blocked(self):
-        _, model = simple_2model_continuous()
-        with model:
-            for sampler in self.samplers:
-                sampler_instance = sampler(blocked=True)
-                assert not isinstance(sampler_instance, CompoundStep)
-                assert isinstance(sampler_instance, sampler)
+        with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+            _, model = simple_2model_continuous()
+            with model:
+                for sampler in self.samplers:
+                    sampler_instance = sampler(blocked=True)
+                    assert not isinstance(sampler_instance, CompoundStep)
+                    assert isinstance(sampler_instance, sampler)
+
+    def test_name(self):
+        with Model() as m:
+            c1 = HalfNormal("c1")
+            c2 = HalfNormal("c2")
+
+            step1 = NUTS([c1])
+            step2 = Slice([c2])
+            step = CompoundStep([step1, step2])
+        assert step.name == "Compound[nuts, slice]"
 
 
 class TestAssignStepMethods:
@@ -209,32 +237,37 @@ class TestAssignStepMethods:
         """Test bernoulli distribution is assigned binary gibbs metropolis method"""
         with Model() as model:
             Bernoulli("x", 0.5)
-            steps = assign_step_methods(model, [])
+            with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+                steps = assign_step_methods(model, [])
         assert isinstance(steps, BinaryGibbsMetropolis)
 
     def test_normal(self):
         """Test normal distribution is assigned NUTS method"""
         with Model() as model:
             Normal("x", 0, 1)
-            steps = assign_step_methods(model, [])
+            with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+                steps = assign_step_methods(model, [])
         assert isinstance(steps, NUTS)
 
     def test_categorical(self):
         """Test categorical distribution is assigned categorical gibbs metropolis method"""
         with Model() as model:
             Categorical("x", np.array([0.25, 0.75]))
-            steps = assign_step_methods(model, [])
+            with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+                steps = assign_step_methods(model, [])
         assert isinstance(steps, BinaryGibbsMetropolis)
         with Model() as model:
             Categorical("y", np.array([0.25, 0.70, 0.05]))
-            steps = assign_step_methods(model, [])
+            with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+                steps = assign_step_methods(model, [])
         assert isinstance(steps, CategoricalGibbsMetropolis)
 
     def test_binomial(self):
         """Test binomial distribution is assigned metropolis method."""
         with Model() as model:
             Binomial("x", 10, 0.5)
-            steps = assign_step_methods(model, [])
+            with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+                steps = assign_step_methods(model, [])
         assert isinstance(steps, Metropolis)
 
     def test_normal_nograd_op(self):
@@ -254,7 +287,8 @@ class TestAssignStepMethods:
             data = np.random.normal(size=(100,))
             Normal("y", mu=kill_grad(x), sigma=1, observed=data.astype(aesara.config.floatX))
 
-            steps = assign_step_methods(model, [])
+            with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+                steps = assign_step_methods(model, [])
         assert isinstance(steps, Slice)
 
     def test_modify_step_methods(self):
@@ -266,7 +300,8 @@ class TestAssignStepMethods:
 
         with Model() as model:
             Normal("x", 0, 1)
-            steps = assign_step_methods(model, [])
+            with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+                steps = assign_step_methods(model, [])
         assert not isinstance(steps, NUTS)
 
         # add back nuts
@@ -274,7 +309,8 @@ class TestAssignStepMethods:
 
         with Model() as model:
             Normal("x", 0, 1)
-            steps = assign_step_methods(model, [])
+            with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+                steps = assign_step_methods(model, [])
         assert isinstance(steps, NUTS)
 
 
@@ -1306,7 +1342,8 @@ class TestRVsAssignmentSteps:
             c1 = HalfNormal("c1")
             c2 = HalfNormal("c2")
 
-            assert [m.rvs_to_values[c1]] == step([c1], **step_kwargs).vars
+            with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+                assert [m.rvs_to_values[c1]] == step([c1], **step_kwargs).vars
             assert {m.rvs_to_values[c1], m.rvs_to_values[c2]} == set(
                 step([c1, c2], **step_kwargs).vars
             )
@@ -1323,7 +1360,8 @@ class TestRVsAssignmentSteps:
             d1 = Bernoulli("d1", p=0.5)
             d2 = Bernoulli("d2", p=0.5)
 
-            assert [m.rvs_to_values[d1]] == step([d1], **step_kwargs).vars
+            with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+                assert [m.rvs_to_values[d1]] == step([d1], **step_kwargs).vars
             assert {m.rvs_to_values[d1], m.rvs_to_values[d2]} == set(
                 step([d1, d2], **step_kwargs).vars
             )
@@ -1333,7 +1371,8 @@ class TestRVsAssignmentSteps:
             c1 = HalfNormal("c1")
             c2 = HalfNormal("c2")
 
-            step1 = NUTS([c1])
-            step2 = NUTS([c2])
-            step = CompoundStep([step1, step2])
+            with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+                step1 = NUTS([c1])
+                step2 = NUTS([c2])
+                step = CompoundStep([step1, step2])
             assert {m.rvs_to_values[c1], m.rvs_to_values[c2]} == set(step.vars)
