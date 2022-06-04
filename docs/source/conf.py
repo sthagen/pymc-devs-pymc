@@ -127,7 +127,7 @@ release = version
 language = None
 
 # configure notfound extension to not add any prefix to the urls
-notfound_urls_prefix = "/en/latest/"
+notfound_urls_prefix = "/projects/docs/en/latest/"
 
 # There are two options for replacing |today|: either, you set today to some
 # non-false value, then it is used:
@@ -154,7 +154,7 @@ panels_add_bootstrap_css = False
 myst_heading_anchors = None
 
 rediraffe_redirects = {
-    "index.md": "learning.md",
+    "index.md": "learn.md",
 }
 # The reST default role (used for this markup: `text`) to use for all
 # documents.
@@ -189,9 +189,9 @@ intersphinx_mapping = {
     "aesara": ("https://aesara.readthedocs.io/en/latest/", None),
     "aeppl": ("https://aeppl.readthedocs.io/en/latest/", None),
     "home": ("https://www.pymc.io", None),
-    "pmx": ("https://docs.pymc.io/projects/experimental/en/latest", None),
+    "pmx": ("https://www.pymc.io/projects/experimental/en/latest", None),
     "numpy": ("https://numpy.org/doc/stable/", None),
-    "nb": ("https://docs.pymc.io/projects/examples/en/latest/", None),
+    "nb": ("https://www.pymc.io/projects/examples/en/latest/", None),
     "myst": ("https://myst-parser.readthedocs.io/en/latest", None),
     "myst-nb": ("https://myst-nb.readthedocs.io/en/latest/", None),
     "python": ("https://docs.python.org/3/", None),
@@ -309,7 +309,9 @@ html_css_files = ["custom.css"]
 # html_use_smartypants = True
 
 # Custom sidebar templates, maps document names to template names.
-html_sidebars = {"**": ["sidebar-nav-bs.html"]}
+html_sidebars = {
+    "**": ["sidebar-nav-bs.html"],
+}
 
 # Additional templates that should be rendered to pages, maps page names to
 # template names.
