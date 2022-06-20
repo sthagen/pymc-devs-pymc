@@ -48,6 +48,7 @@ from aesara.tensor.sharedvar import ScalarSharedVariable
 from aesara.tensor.var import TensorConstant, TensorVariable
 
 from pymc.aesaraf import (
+    PointFunc,
     compile_pymc,
     convert_observed_data,
     gradient,
@@ -640,7 +641,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
         vars: Optional[Union[Variable, Sequence[Variable]]] = None,
         jacobian: bool = True,
         sum: bool = True,
-    ):
+    ) -> PointFunc:
         """Compiled log probability density function.
 
         Parameters
@@ -660,7 +661,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
         self,
         vars: Optional[Union[Variable, Sequence[Variable]]] = None,
         jacobian: bool = True,
-    ):
+    ) -> PointFunc:
         """Compiled log probability density gradient function.
 
         Parameters
@@ -677,7 +678,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
         self,
         vars: Optional[Union[Variable, Sequence[Variable]]] = None,
         jacobian: bool = True,
-    ):
+    ) -> PointFunc:
         """Compiled log probability density hessian function.
 
         Parameters
@@ -1597,15 +1598,18 @@ class Model(WithMemoization, metaclass=ContextMeta):
         mode=None,
         point_fn: bool = True,
         **kwargs,
-    ) -> Union["PointFunc", Callable[[Sequence[np.ndarray]], Sequence[np.ndarray]]]:
+    ) -> Union[PointFunc, Callable[[Sequence[np.ndarray]], Sequence[np.ndarray]]]:
         """Compiles an Aesara function
 
         Parameters
         ----------
-        outs: Aesara variable or iterable of Aesara variables
-        inputs: Aesara input variables, defaults to aesaraf.inputvars(outs).
-        mode: Aesara compilation mode, default=None
-        point_fn:
+        outs
+            Aesara variable or iterable of Aesara variables.
+        inputs
+            Aesara input variables, defaults to aesaraf.inputvars(outs).
+        mode
+            Aesara compilation mode, default=None.
+        point_fn : bool
             Whether to wrap the compiled function in a PointFunc, which takes a Point
             dictionary with model variable names and values as input.
 
@@ -1871,22 +1875,30 @@ def set_data(new_data, model=None, *, coords=None):
         model.set_data(variable_name, new_value, coords=coords)
 
 
-def compile_fn(outs, mode=None, point_fn=True, model=None, **kwargs):
+def compile_fn(
+    outs, mode=None, point_fn: bool = True, model: Optional[Model] = None, **kwargs
+) -> Union[PointFunc, Callable[[Sequence[np.ndarray]], Sequence[np.ndarray]]]:
     """Compiles an Aesara function which returns ``outs`` and takes values of model
     vars as a dict as an argument.
+
     Parameters
     ----------
-    outs: Aesara variable or iterable of Aesara variables
-    mode: Aesara compilation mode
-    point_fn:
+    outs
+        Aesara variable or iterable of Aesara variables.
+    mode
+        Aesara compilation mode, default=None.
+    point_fn : bool
         Whether to wrap the compiled function in a PointFunc, which takes a Point
         dictionary with model variable names and values as input.
+    model : Model, optional
+        Current model on stack.
+
     Returns
     -------
     Compiled Aesara function as point function.
     """
     model = modelcontext(model)
-    return model.compile_fn(outs, mode, point_fn=point_fn, **kwargs)
+    return model.compile_fn(outs, mode=mode, point_fn=point_fn, **kwargs)
 
 
 def Point(*args, filter_model_vars=False, **kwargs) -> Dict[str, np.ndarray]:
@@ -1911,16 +1923,6 @@ def Point(*args, filter_model_vars=False, **kwargs) -> Dict[str, np.ndarray]:
         for k, v in d.items()
         if not filter_model_vars or (get_var_name(k) in map(get_var_name, model.value_vars))
     }
-
-
-class PointFunc:
-    """Wraps so a function so it takes a dict of arguments instead of arguments."""
-
-    def __init__(self, f):
-        self.f = f
-
-    def __call__(self, state):
-        return self.f(**state)
 
 
 def Deterministic(name, var, model=None, dims=None, auto=False):

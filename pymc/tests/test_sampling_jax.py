@@ -1,5 +1,6 @@
 import aesara
 import aesara.tensor as at
+import jax
 import numpy as np
 import pytest
 
@@ -27,7 +28,16 @@ from pymc.sampling_jax import (
     ],
 )
 @pytest.mark.parametrize("postprocessing_backend", [None, "cpu"])
-def test_transform_samples(sampler, postprocessing_backend):
+@pytest.mark.parametrize(
+    "chains",
+    [
+        pytest.param(1),
+        pytest.param(
+            2, marks=pytest.mark.skipif(len(jax.devices()) < 2, reason="not enough devices")
+        ),
+    ],
+)
+def test_transform_samples(sampler, postprocessing_backend, chains):
     aesara.config.on_opt_error = "raise"
     np.random.seed(13244)
 
@@ -39,7 +49,7 @@ def test_transform_samples(sampler, postprocessing_backend):
         b = pm.Normal("b", a, sigma=sigma, observed=obs_at)
 
         trace = sampler(
-            chains=1,
+            chains=chains,
             random_seed=1322,
             keep_untransformed=True,
             postprocessing_backend=postprocessing_backend,
@@ -56,7 +66,7 @@ def test_transform_samples(sampler, postprocessing_backend):
     obs_at.set_value(-obs)
     with model:
         trace = sampler(
-            chains=2,
+            chains=chains,
             random_seed=1322,
             keep_untransformed=False,
             postprocessing_backend=postprocessing_backend,
@@ -73,6 +83,7 @@ def test_transform_samples(sampler, postprocessing_backend):
         sample_numpyro_nuts,
     ],
 )
+@pytest.mark.skipif(len(jax.devices()) < 2, reason="not enough devices")
 def test_deterministic_samples(sampler):
     aesara.config.on_opt_error = "raise"
     np.random.seed(13244)
@@ -160,8 +171,9 @@ def test_get_jaxified_logp():
 def test_idata_kwargs(sampler, idata_kwargs, postprocessing_backend):
     with pm.Model() as m:
         x = pm.Normal("x")
-        z = pm.Normal("z")
         y = pm.Normal("y", x, observed=0)
+        pm.ConstantData("constantdata", [1, 2, 3])
+        pm.MutableData("mutabledata", 2)
         idata = sampler(
             tune=50,
             draws=50,
@@ -169,6 +181,8 @@ def test_idata_kwargs(sampler, idata_kwargs, postprocessing_backend):
             idata_kwargs=idata_kwargs,
             postprocessing_backend=postprocessing_backend,
         )
+    assert "constantdata" in idata.constant_data
+    assert "mutabledata" in idata.constant_data
 
     if idata_kwargs.get("log_likelihood", True):
         assert "log_likelihood" in idata
@@ -207,7 +221,15 @@ def test_get_batched_jittered_initial_points():
     ],
 )
 @pytest.mark.parametrize("random_seed", (None, 123))
-@pytest.mark.parametrize("chains", (1, 2))
+@pytest.mark.parametrize(
+    "chains",
+    [
+        pytest.param(1),
+        pytest.param(
+            2, marks=pytest.mark.skipif(len(jax.devices()) < 2, reason="not enough devices")
+        ),
+    ],
+)
 def test_seeding(chains, random_seed, sampler):
     sample_kwargs = dict(
         tune=100,
