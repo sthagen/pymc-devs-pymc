@@ -34,7 +34,7 @@ jobs:
       matrix:
         os: [ubuntu-20.04]
         floatx: [float64]
-        python-version: ["3.7"]
+        python-version: ["3.10"]
         test-subset:
           - |
             pymc/tests/test_util.py
@@ -105,7 +105,7 @@ jobs:
             ~/.cache/pip
             $RUNNER_TOOL_CACHE/Python/*
             ~\AppData\Local\pip\Cache
-          key: ${{ runner.os }}-build-${{ matrix.python-version }}-${{
+          key: ${{ runner.os }}-build-${{ matrix.python-version }}-${{ env.CACHE_NUMBER }}-${{
             hashFiles('requirements.txt') }}
       - uses: conda-incubator/setup-miniconda@v2
         with:
@@ -175,7 +175,7 @@ jobs:
             ~/.cache/pip
             $RUNNER_TOOL_CACHE/Python/*
             ~\AppData\Local\pip\Cache
-          key: ${{ runner.os }}-build-${{ matrix.python-version }}-${{
+          key: ${{ runner.os }}-build-${{ matrix.python-version }}-${{ env.CACHE_NUMBER }}-${{
             hashFiles('requirements.txt') }}
       - uses: conda-incubator/setup-miniconda@v2
         with:
@@ -253,7 +253,7 @@ jobs:
             ~/.cache/pip
             $RUNNER_TOOL_CACHE/Python/*
             ~\AppData\Local\pip\Cache
-          key: ${{ runner.os }}-build-${{ matrix.python-version }}-${{
+          key: ${{ runner.os }}-build-${{ matrix.python-version }}-${{ env.CACHE_NUMBER }}-${{
             hashFiles('requirements.txt') }}
       - uses: conda-incubator/setup-miniconda@v2
         with:
@@ -317,7 +317,7 @@ jobs:
             ~/.cache/pip
             $RUNNER_TOOL_CACHE/Python/*
             ~\AppData\Local\pip\Cache
-          key: ${{ runner.os }}-build-${{ matrix.python-version }}-${{
+          key: ${{ runner.os }}-build-${{ matrix.python-version }}-${{ env.CACHE_NUMBER }}-${{
             hashFiles('requirements.txt') }}
       - uses: conda-incubator/setup-miniconda@v2
         with:
@@ -354,7 +354,7 @@ jobs:
       matrix:
         os: [windows-latest]
         floatx: [float32]
-        python-version: ["3.8"]
+        python-version: ["3.10"]
         test-subset:
         - pymc/tests/test_sampling.py pymc/tests/test_ode.py
       fail-fast: false
@@ -386,7 +386,7 @@ jobs:
             ~/.cache/pip
             $RUNNER_TOOL_CACHE/Python/*
             ~\AppData\Local\pip\Cache
-          key: ${{ runner.os }}-build-${{ matrix.python-version }}-${{
+          key: ${{ runner.os }}-build-${{ matrix.python-version }}-${{ env.CACHE_NUMBER }}-${{
             hashFiles('requirements.txt') }}
       - uses: conda-incubator/setup-miniconda@v2
         with:
@@ -396,7 +396,7 @@ jobs:
           activate-environment: pymc-test
           channel-priority: strict
           environment-file: conda-envs/windows-environment-test.yml
-          python-verision: ${{matrix.python-version}}
+          python-version: ${{matrix.python-version}}
           use-mamba: true
           use-only-tar-bz2: true # IMPORTANT: This needs to be set for caching to work properly!
       - name: Install-pymc
