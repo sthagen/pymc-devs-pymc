@@ -13,7 +13,7 @@
 #   limitations under the License.
 
 # pylint: disable=wildcard-import
-__version__ = "4.1.4"
+__version__ = "4.1.5"
 
 import logging
 
@@ -65,7 +65,7 @@ from pymc.math import (
     probit,
 )
 from pymc.model import *
-from pymc.model_graph import model_to_graphviz
+from pymc.model_graph import model_to_graphviz, model_to_networkx
 from pymc.plots import *
 from pymc.printing import *
 from pymc.sampling import *
