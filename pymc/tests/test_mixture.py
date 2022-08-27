@@ -12,6 +12,8 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
+import warnings
+
 from contextlib import ExitStack as does_not_raise
 
 import aesara
@@ -440,14 +442,16 @@ class TestMixture(SeededTest):
             mu = Gamma("mu", 1.0, 1.0, shape=pois_w.size)
             Mixture("x_obs", w, Poisson.dist(mu), observed=pois_x)
             step = Metropolis()
-            trace = sample(
-                5000,
-                step,
-                random_seed=self.random_seed,
-                progressbar=False,
-                chains=1,
-                return_inferencedata=False,
-            )
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", "More chains .* than draws.*", UserWarning)
+                trace = sample(
+                    5000,
+                    step,
+                    random_seed=self.random_seed,
+                    progressbar=False,
+                    chains=1,
+                    return_inferencedata=False,
+                )
 
         assert_allclose(np.sort(trace["w"].mean(axis=0)), np.sort(pois_w), rtol=0.1, atol=0.1)
         assert_allclose(np.sort(trace["mu"].mean(axis=0)), np.sort(pois_mu), rtol=0.1, atol=0.1)
@@ -461,14 +465,16 @@ class TestMixture(SeededTest):
             w = Dirichlet("w", floatX(np.ones_like(pois_w)), shape=pois_w.shape)
             mu = Gamma("mu", 1.0, 1.0, shape=pois_w.size)
             Mixture("x_obs", w, [Poisson.dist(mu[0]), Poisson.dist(mu[1])], observed=pois_x)
-            trace = sample(
-                5000,
-                chains=1,
-                step=Metropolis(),
-                random_seed=self.random_seed,
-                progressbar=False,
-                return_inferencedata=False,
-            )
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", "More chains .* than draws.*", UserWarning)
+                trace = sample(
+                    5000,
+                    chains=1,
+                    step=Metropolis(),
+                    random_seed=self.random_seed,
+                    progressbar=False,
+                    return_inferencedata=False,
+                )
 
         assert_allclose(np.sort(trace["w"].mean(axis=0)), np.sort(pois_w), rtol=0.1, atol=0.1)
         assert_allclose(np.sort(trace["mu"].mean(axis=0)), np.sort(pois_mu), rtol=0.1, atol=0.1)
@@ -489,14 +495,16 @@ class TestMixture(SeededTest):
                 [Normal.dist(mu[0], tau=tau[0]), Normal.dist(mu[1], tau=tau[1])],
                 observed=norm_x,
             )
-            trace = sample(
-                5000,
-                chains=1,
-                step=Metropolis(),
-                random_seed=self.random_seed,
-                progressbar=False,
-                return_inferencedata=False,
-            )
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", "More chains .* than draws.*", UserWarning)
+                trace = sample(
+                    5000,
+                    chains=1,
+                    step=Metropolis(),
+                    random_seed=self.random_seed,
+                    progressbar=False,
+                    return_inferencedata=False,
+                )
 
         assert_allclose(np.sort(trace["w"].mean(axis=0)), np.sort(norm_w), rtol=0.1, atol=0.1)
         assert_allclose(np.sort(trace["mu"].mean(axis=0)), np.sort(norm_mu), rtol=0.1, atol=0.1)
@@ -655,10 +663,10 @@ class TestMixture(SeededTest):
         assert_allclose(priorlogp + mixmixlogpg.sum(), model.logp(test_point), rtol=rtol)
 
     def test_iterable_single_component_warning(self):
-        with pytest.warns(None) as record:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
             Mixture.dist(w=[0.5, 0.5], comp_dists=Normal.dist(size=2))
             Mixture.dist(w=[0.5, 0.5], comp_dists=[Normal.dist(size=2), Normal.dist(size=2)])
-        assert not record
 
         with pytest.warns(UserWarning, match="Single component will be treated as a mixture"):
             Mixture.dist(w=[0.5, 0.5], comp_dists=[Normal.dist(size=2)])
@@ -745,14 +753,16 @@ class TestNormalMixture(SeededTest):
             tau = Gamma("tau", 1.0, 1.0, shape=norm_w.size)
             NormalMixture("x_obs", w, mu, tau=tau, observed=norm_x)
             step = Metropolis()
-            trace = sample(
-                5000,
-                step,
-                random_seed=self.random_seed,
-                progressbar=False,
-                chains=1,
-                return_inferencedata=False,
-            )
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", "More chains .* than draws.*", UserWarning)
+                trace = sample(
+                    5000,
+                    step,
+                    random_seed=self.random_seed,
+                    progressbar=False,
+                    chains=1,
+                    return_inferencedata=False,
+                )
 
         assert_allclose(np.sort(trace["w"].mean(axis=0)), np.sort(norm_w), rtol=0.1, atol=0.1)
         assert_allclose(np.sort(trace["mu"].mean(axis=0)), np.sort(norm_mu), rtol=0.1, atol=0.1)
@@ -1303,9 +1313,9 @@ class TestMixtureDefaultTransforms:
     def test_warning(self):
         with Model() as m:
             comp_dists = [HalfNormal.dist(), Exponential.dist(1)]
-            with pytest.warns(None) as rec:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
                 Mixture("mix1", w=[0.5, 0.5], comp_dists=comp_dists)
-            assert not rec
 
             comp_dists = [Uniform.dist(0, 1), Uniform.dist(0, 2)]
             with pytest.warns(MixtureTransformWarning):
@@ -1315,16 +1325,16 @@ class TestMixtureDefaultTransforms:
             with pytest.warns(MixtureTransformWarning):
                 Mixture("mix3", w=[0.5, 0.5], comp_dists=comp_dists)
 
-            with pytest.warns(None) as rec:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
                 Mixture("mix4", w=[0.5, 0.5], comp_dists=comp_dists, transform=None)
-            assert not rec
 
-            with pytest.warns(None) as rec:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
                 Mixture("mix5", w=[0.5, 0.5], comp_dists=comp_dists, observed=1)
-            assert not rec
 
             # Case where the appropriate default transform is None
             comp_dists = [Normal.dist(), Normal.dist()]
-            with pytest.warns(None) as rec:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
                 Mixture("mix6", w=[0.5, 0.5], comp_dists=comp_dists)
-            assert not rec

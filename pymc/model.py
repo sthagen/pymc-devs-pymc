@@ -43,7 +43,7 @@ import scipy.sparse as sps
 from aesara.compile.sharedvalue import SharedVariable
 from aesara.graph.basic import Constant, Variable, graph_inputs
 from aesara.graph.fg import FunctionGraph
-from aesara.tensor.random.opt import local_subtensor_rv_lift
+from aesara.tensor.random.rewriting import local_subtensor_rv_lift
 from aesara.tensor.sharedvar import ScalarSharedVariable
 from aesara.tensor.var import TensorConstant, TensorVariable
 
@@ -362,7 +362,7 @@ class ValueGradFunction:
         self._extra_vars_shared = {}
         for var, value in extra_vars_and_values.items():
             shared = aesara.shared(
-                value, var.name + "_shared__", broadcastable=[s == 1 for s in value.shape]
+                value, var.name + "_shared__", shape=[s == 1 for s in value.shape]
             )
             self._extra_vars_shared[var.name] = shared
             givens.append((var, shared))
@@ -465,15 +465,15 @@ class Model(WithMemoization, metaclass=ContextMeta):
                 # variables in several ways note, that all variables
                 # will get model's name prefix
 
-                # 3) you can create variables with Var method
-                self.Var('v1', Normal.dist(mu=mean, sigma=sd))
-                # this will create variable named like '{prefix::}v1'
+                # 3) you can create variables with the register_rv method
+                self.register_rv(Normal.dist(mu=mean, sigma=sigma), 'v1', initval=1)
+                # this will create variable named like '{name::}v1'
                 # and assign attribute 'v1' to instance created
                 # variable can be accessed with self.v1 or self['v1']
 
                 # 4) this syntax will also work as we are in the
                 # context of instance itself, names are given as usual
-                Normal('v2', mu=mean, sigma=sd)
+                Normal('v2', mu=mean, sigma=sigma)
 
                 # something more complex is allowed, too
                 half_cauchy = HalfCauchy('sigma', beta=10, initval=1.)
@@ -510,7 +510,6 @@ class Model(WithMemoization, metaclass=ContextMeta):
             CustomModel(mean=2, name='second')
 
         # variables inside both scopes will be named like `first::*`, `second::*`
-
     """
 
     if TYPE_CHECKING:

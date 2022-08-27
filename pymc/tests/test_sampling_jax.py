@@ -1,3 +1,5 @@
+import warnings
+
 from typing import Any, Callable, Dict, Optional
 from unittest import mock
 
@@ -14,17 +16,18 @@ from numpyro.infer import MCMC
 
 import pymc as pm
 
-from pymc.sampling_jax import (
-    _get_batched_jittered_initial_points,
-    _get_log_likelihood,
-    _numpyro_nuts_defaults,
-    _replace_shared_variables,
-    _update_numpyro_nuts_kwargs,
-    get_jaxified_graph,
-    get_jaxified_logp,
-    sample_blackjax_nuts,
-    sample_numpyro_nuts,
-)
+with pytest.warns(UserWarning, match="module is experimental"):
+    from pymc.sampling_jax import (
+        _get_batched_jittered_initial_points,
+        _get_log_likelihood,
+        _numpyro_nuts_defaults,
+        _replace_shared_variables,
+        _update_numpyro_nuts_kwargs,
+        get_jaxified_graph,
+        get_jaxified_logp,
+        sample_blackjax_nuts,
+        sample_numpyro_nuts,
+    )
 
 
 @pytest.mark.parametrize(
@@ -113,9 +116,9 @@ def test_get_jaxified_graph():
     # be removed once https://github.com/aesara-devs/aesara/issues/637 is sorted.
     x = at.scalar("x")
     y = at.exp(x)
-    with pytest.warns(None) as record:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
         fn = get_jaxified_graph(inputs=[x], outputs=[y])
-    assert not record
     assert np.isclose(fn(0), 1)
 
 
@@ -127,7 +130,9 @@ def test_get_log_likelihood():
         sigma = pm.HalfNormal("sigma")
         b = pm.Normal("b", a, sigma=sigma, observed=obs_at)
 
-        trace = pm.sample(tune=10, draws=10, chains=2, random_seed=1322)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", ".*number of samples.*", UserWarning)
+            trace = pm.sample(tune=10, draws=10, chains=2, random_seed=1322)
 
     b_true = trace.log_likelihood.b.values
     a = np.array(trace.posterior.a)

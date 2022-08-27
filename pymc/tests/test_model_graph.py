@@ -11,6 +11,8 @@
 #   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
+import warnings
+
 import aesara
 import numpy as np
 import pytest
@@ -20,6 +22,7 @@ from aesara.tensor.var import TensorConstant
 
 import pymc as pm
 
+from pymc.exceptions import ImputationWarning
 from pymc.model_graph import ModelGraph, model_to_graphviz, model_to_networkx
 from pymc.tests.helpers import SeededTest
 
@@ -136,7 +139,8 @@ def model_with_imputations():
 
     with pm.Model() as model:
         a = pm.Normal("a")
-        pm.Normal("L", a, 1.0, observed=x)
+        with pytest.warns(ImputationWarning):
+            pm.Normal("L", a, 1.0, observed=x)
 
     compute_graph = {
         "a": set(),
@@ -271,7 +275,8 @@ class TestRadonModel(BaseModelGraphTest):
     model_func = radon_model
 
     def test_checks_formatting(self):
-        with pytest.warns(None):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
             model_to_graphviz(self.model, formatting="plain")
         with pytest.raises(ValueError, match="Unsupported formatting"):
             model_to_graphviz(self.model, formatting="latex")
