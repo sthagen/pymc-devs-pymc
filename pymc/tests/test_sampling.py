@@ -21,6 +21,7 @@ from typing import Tuple
 import aesara
 import aesara.tensor as at
 import numpy as np
+import numpy.random as npr
 import numpy.testing as npt
 import pytest
 import scipy.special
@@ -38,6 +39,7 @@ import pymc as pm
 from pymc.aesaraf import compile_pymc
 from pymc.backends.base import MultiTrace
 from pymc.backends.ndarray import NDArray
+from pymc.distributions import transforms
 from pymc.exceptions import IncorrectArgumentsError, SamplingError
 from pymc.sampling import _get_seeds_per_chain, compile_forward_sampling_function
 from pymc.tests.helpers import SeededTest, fast_unstable_sampling_mode
@@ -407,9 +409,15 @@ class TestSample(SeededTest):
             with pytest.raises(NotImplementedError):
                 xvars = [t["mu"] for t in trace]
 
-    def test_deterministic_of_unobserved(self):
+    @pytest.mark.parametrize("symbolic_rv", (False, True))
+    def test_deterministic_of_unobserved(self, symbolic_rv):
         with pm.Model() as model:
-            x = pm.HalfNormal("x", 1)
+            if symbolic_rv:
+                x = pm.Censored(
+                    "x", pm.HalfNormal.dist(1), lower=None, upper=10, transform=transforms.log
+                )
+            else:
+                x = pm.HalfNormal("x", 1)
             y = pm.Deterministic("y", x + 100)
             idata = pm.sample(
                 chains=1,
@@ -420,10 +428,15 @@ class TestSample(SeededTest):
 
         np.testing.assert_allclose(idata.posterior["y"], idata.posterior["x"] + 100)
 
-    def test_transform_with_rv_dependency(self):
+    @pytest.mark.parametrize("symbolic_rv", (False, True))
+    def test_transform_with_rv_dependency(self, symbolic_rv):
         # Test that untransformed variables that depend on upstream variables are properly handled
         with pm.Model() as m:
-            x = pm.HalfNormal("x", observed=1)
+            if symbolic_rv:
+                x = pm.Censored("x", pm.HalfNormal.dist(1), lower=0, upper=1, observed=1)
+            else:
+                x = pm.HalfNormal("x", observed=1)
+
             transform = pm.distributions.transforms.Interval(
                 bounds_fn=lambda *inputs: (inputs[-2], inputs[-1])
             )
@@ -1606,7 +1619,7 @@ class TestCompileForwardSampler:
             beta = pm.Normal("beta", 0, 0.1)
             mu = pm.Deterministic("mu", alpha + beta * x)
             sigma = pm.HalfNormal("sigma", 0.1)
-            obs = pm.Normal("obs", mu, sigma, observed=y)
+            obs = pm.Normal("obs", mu, sigma, observed=y, shape=x.shape)
 
         f = compile_forward_sampling_function(
             [obs],
@@ -1624,7 +1637,7 @@ class TestCompileForwardSampler:
             beta = pm.Normal("beta", 0, 0.1)
             mu = pm.Deterministic("mu", alpha + beta * x)
             sigma = pm.HalfNormal("sigma", 0.1)
-            obs = pm.Normal("obs", mu, sigma, observed=y)
+            obs = pm.Normal("obs", mu, sigma, observed=y, shape=x.shape)
 
         f = compile_forward_sampling_function(
             [obs],
@@ -1644,7 +1657,7 @@ class TestCompileForwardSampler:
             beta = pm.Normal("beta", 0, 0.1, size=p.shape)
             mu = pm.Deterministic("mu", beta[category])
             sigma = pm.HalfNormal("sigma", 0.1)
-            pm.Normal("obs", mu, sigma, observed=y)
+            pm.Normal("obs", mu, sigma, observed=y, shape=mu.shape)
 
         f = compile_forward_sampling_function(
             outputs=model.observed_RVs,
@@ -1675,7 +1688,7 @@ class TestCompileForwardSampler:
             mu = pm.Normal("mu", 0, 1)
             nested_mu = pm.Normal("nested_mu", mu, 1, size=10)
             sigma = pm.HalfNormal("sigma", 1)
-            pm.Normal("obs", nested_mu, sigma, observed=y)
+            pm.Normal("obs", nested_mu, sigma, observed=y, shape=nested_mu.shape)
 
         f = compile_forward_sampling_function(
             outputs=model.observed_RVs,
@@ -1696,7 +1709,7 @@ class TestCompileForwardSampler:
         assert {i.name for i in self.get_function_inputs(f)} == {"sigma"}
         assert {i.name for i in self.get_function_roots(f)} == {"mu", "sigma"}
 
-    def test_distributions_op_from_graph(self):
+    def test_mixture(self):
         with pm.Model() as model:
             w = pm.Dirichlet("w", a=np.ones(3), size=(5, 3))
 
@@ -1730,7 +1743,7 @@ class TestCompileForwardSampler:
         assert {i.name for i in self.get_function_inputs(f)} == {"mu"}
         assert {i.name for i in self.get_function_roots(f)} == {"mu"}
 
-    def test_distributions_no_op_from_graph(self):
+    def test_censored(self):
         with pm.Model() as model:
             latent_mu = pm.Normal("latent_mu", mu=np.arange(3), sigma=1)
             mu = pm.Censored("mu", pm.Normal.dist(mu=latent_mu, sigma=1), lower=-1, upper=1)
@@ -1787,6 +1800,25 @@ class TestCompileForwardSampler:
         assert {i.name for i in self.get_function_inputs(f)} == set()
         assert {i.name for i in self.get_function_roots(f)} == set()
 
+    def test_non_random_model_variable(self):
+        with pm.Model() as model:
+            # A user may register non-pure RandomVariables that can nevertheless be
+            # sampled, as long as a custom logprob is dispatched or Aeppl can infer
+            # its logprob (which is the case for `clip`)
+            y = at.clip(pm.Normal.dist(), -1, 1)
+            y = model.register_rv(y, name="y")
+            y_abs = pm.Deterministic("y_abs", at.abs(y))
+            obs = pm.Normal("obs", y_abs, observed=np.zeros(10))
+
+        # y_abs should be resampled even if in the trace, because the source y is missing
+        f = compile_forward_sampling_function(
+            outputs=[obs],
+            vars_in_trace=[y_abs],
+            basic_rvs=model.basic_RVs,
+        )
+        assert {i.name for i in self.get_function_inputs(f)} == set()
+        assert {i.name for i in self.get_function_roots(f)} == set()
+
 
 def test_get_seeds_per_chain():
     ret = _get_seeds_per_chain(None, chains=1)
@@ -1822,3 +1854,313 @@ def test_get_seeds_per_chain():
 
     with pytest.raises(ValueError, match=re.escape("The `seeds` must be array-like")):
         _get_seeds_per_chain({1: 1, 2: 2}, 2)
+
+
+def test_distinct_rvs():
+    """Make sure `RandomVariable`s generated using a `Model`'s default RNG state all have distinct states."""
+
+    with pm.Model() as model:
+        X_rv = pm.Normal("x")
+        Y_rv = pm.Normal("y")
+
+        pp_samples = pm.sample_prior_predictive(
+            samples=2, return_inferencedata=False, random_seed=npr.RandomState(2023532)
+        )
+
+    assert X_rv.owner.inputs[0] != Y_rv.owner.inputs[0]
+
+    with pm.Model():
+        X_rv = pm.Normal("x")
+        Y_rv = pm.Normal("y")
+
+        pp_samples_2 = pm.sample_prior_predictive(
+            samples=2, return_inferencedata=False, random_seed=npr.RandomState(2023532)
+        )
+
+    assert np.array_equal(pp_samples["y"], pp_samples_2["y"])
+
+
+class TestNestedRandom(SeededTest):
+    def build_model(self, distribution, shape, nested_rvs_info):
+        with pm.Model() as model:
+            nested_rvs = {}
+            for rv_name, info in nested_rvs_info.items():
+                try:
+                    value, nested_shape = info
+                    loc = 0.0
+                except ValueError:
+                    value, nested_shape, loc = info
+                if value is None:
+                    nested_rvs[rv_name] = pm.Uniform(
+                        rv_name,
+                        0 + loc,
+                        1 + loc,
+                        shape=nested_shape,
+                    )
+                else:
+                    nested_rvs[rv_name] = value * np.ones(nested_shape)
+            rv = distribution(
+                "target",
+                shape=shape,
+                **nested_rvs,
+            )
+        return model, rv, nested_rvs
+
+    def sample_prior(self, distribution, shape, nested_rvs_info, prior_samples):
+        model, rv, nested_rvs = self.build_model(
+            distribution,
+            shape,
+            nested_rvs_info,
+        )
+        with model:
+            return pm.sample_prior_predictive(prior_samples, return_inferencedata=False)
+
+    @pytest.mark.parametrize(
+        ["prior_samples", "shape", "mu", "alpha"],
+        [
+            [10, (3,), (None, tuple()), (None, (3,))],
+            [10, (3,), (None, (3,)), (None, tuple())],
+            [
+                10,
+                (
+                    4,
+                    3,
+                ),
+                (None, (3,)),
+                (None, (3,)),
+            ],
+            [
+                10,
+                (
+                    4,
+                    3,
+                ),
+                (None, (3,)),
+                (None, (4, 3)),
+            ],
+        ],
+        ids=str,
+    )
+    def test_NegativeBinomial(
+        self,
+        prior_samples,
+        shape,
+        mu,
+        alpha,
+    ):
+        prior = self.sample_prior(
+            distribution=pm.NegativeBinomial,
+            shape=shape,
+            nested_rvs_info=dict(mu=mu, alpha=alpha),
+            prior_samples=prior_samples,
+        )
+        assert prior["target"].shape == (prior_samples,) + shape
+
+    @pytest.mark.parametrize(
+        ["prior_samples", "shape", "psi", "mu", "alpha"],
+        [
+            [10, (3,), (0.5, tuple()), (None, tuple()), (None, (3,))],
+            [10, (3,), (0.5, (3,)), (None, tuple()), (None, (3,))],
+            [10, (3,), (0.5, tuple()), (None, (3,)), (None, tuple())],
+            [10, (3,), (0.5, (3,)), (None, (3,)), (None, tuple())],
+            [
+                10,
+                (
+                    4,
+                    3,
+                ),
+                (0.5, (3,)),
+                (None, (3,)),
+                (None, (3,)),
+            ],
+            [
+                10,
+                (
+                    4,
+                    3,
+                ),
+                (0.5, (3,)),
+                (None, (3,)),
+                (None, (4, 3)),
+            ],
+        ],
+        ids=str,
+    )
+    def test_ZeroInflatedNegativeBinomial(
+        self,
+        prior_samples,
+        shape,
+        psi,
+        mu,
+        alpha,
+    ):
+        prior = self.sample_prior(
+            distribution=pm.ZeroInflatedNegativeBinomial,
+            shape=shape,
+            nested_rvs_info=dict(psi=psi, mu=mu, alpha=alpha),
+            prior_samples=prior_samples,
+        )
+        assert prior["target"].shape == (prior_samples,) + shape
+
+    @pytest.mark.parametrize(
+        ["prior_samples", "shape", "nu", "sigma"],
+        [
+            [10, (3,), (None, tuple()), (None, (3,))],
+            [10, (3,), (None, tuple()), (None, (3,))],
+            [10, (3,), (None, (3,)), (None, tuple())],
+            [10, (3,), (None, (3,)), (None, tuple())],
+            [
+                10,
+                (
+                    4,
+                    3,
+                ),
+                (None, (3,)),
+                (None, (3,)),
+            ],
+            [
+                10,
+                (
+                    4,
+                    3,
+                ),
+                (None, (3,)),
+                (None, (4, 3)),
+            ],
+        ],
+        ids=str,
+    )
+    def test_Rice(
+        self,
+        prior_samples,
+        shape,
+        nu,
+        sigma,
+    ):
+        prior = self.sample_prior(
+            distribution=pm.Rice,
+            shape=shape,
+            nested_rvs_info=dict(nu=nu, sigma=sigma),
+            prior_samples=prior_samples,
+        )
+        assert prior["target"].shape == (prior_samples,) + shape
+
+    @pytest.mark.parametrize(
+        ["prior_samples", "shape", "mu", "sigma", "lower", "upper"],
+        [
+            [10, (3,), (None, tuple()), (1.0, tuple()), (None, tuple(), -1), (None, (3,))],
+            [10, (3,), (None, tuple()), (1.0, tuple()), (None, tuple(), -1), (None, (3,))],
+            [10, (3,), (None, tuple()), (1.0, tuple()), (None, (3,), -1), (None, tuple())],
+            [10, (3,), (None, tuple()), (1.0, tuple()), (None, (3,), -1), (None, tuple())],
+            [
+                10,
+                (
+                    4,
+                    3,
+                ),
+                (None, (3,)),
+                (1.0, tuple()),
+                (None, (3,), -1),
+                (None, (3,)),
+            ],
+            [
+                10,
+                (
+                    4,
+                    3,
+                ),
+                (None, (3,)),
+                (1.0, tuple()),
+                (None, (3,), -1),
+                (None, (4, 3)),
+            ],
+            [10, (3,), (0.0, tuple()), (None, tuple()), (None, tuple(), -1), (None, (3,))],
+            [10, (3,), (0.0, tuple()), (None, tuple()), (None, tuple(), -1), (None, (3,))],
+            [10, (3,), (0.0, tuple()), (None, tuple()), (None, (3,), -1), (None, tuple())],
+            [10, (3,), (0.0, tuple()), (None, tuple()), (None, (3,), -1), (None, tuple())],
+            [
+                10,
+                (
+                    4,
+                    3,
+                ),
+                (0.0, tuple()),
+                (None, (3,)),
+                (None, (3,), -1),
+                (None, (3,)),
+            ],
+            [
+                10,
+                (
+                    4,
+                    3,
+                ),
+                (0.0, tuple()),
+                (None, (3,)),
+                (None, (3,), -1),
+                (None, (4, 3)),
+            ],
+        ],
+        ids=str,
+    )
+    def test_TruncatedNormal(
+        self,
+        prior_samples,
+        shape,
+        mu,
+        sigma,
+        lower,
+        upper,
+    ):
+        prior = self.sample_prior(
+            distribution=pm.TruncatedNormal,
+            shape=shape,
+            nested_rvs_info=dict(mu=mu, sigma=sigma, lower=lower, upper=upper),
+            prior_samples=prior_samples,
+        )
+        assert prior["target"].shape == (prior_samples,) + shape
+
+    @pytest.mark.parametrize(
+        ["prior_samples", "shape", "c", "lower", "upper"],
+        [
+            [10, (3,), (None, tuple()), (-1.0, (3,)), (2, tuple())],
+            [10, (3,), (None, tuple()), (-1.0, tuple()), (None, tuple(), 1)],
+            [10, (3,), (None, (3,)), (-1.0, tuple()), (None, tuple(), 1)],
+            [
+                10,
+                (
+                    4,
+                    3,
+                ),
+                (None, (3,)),
+                (-1.0, tuple()),
+                (None, (3,), 1),
+            ],
+            [
+                10,
+                (
+                    4,
+                    3,
+                ),
+                (None, (3,)),
+                (None, tuple(), -1),
+                (None, (3,), 1),
+            ],
+        ],
+        ids=str,
+    )
+    def test_Triangular(
+        self,
+        prior_samples,
+        shape,
+        c,
+        lower,
+        upper,
+    ):
+        prior = self.sample_prior(
+            distribution=pm.Triangular,
+            shape=shape,
+            nested_rvs_info=dict(c=c, lower=lower, upper=upper),
+            prior_samples=prior_samples,
+        )
+        assert prior["target"].shape == (prior_samples,) + shape

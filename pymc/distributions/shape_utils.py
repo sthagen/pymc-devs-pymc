@@ -17,16 +17,21 @@
 A collection of common shape operations needed for broadcasting
 samples from probability distributions for stochastic nodes in PyMC.
 """
+import warnings
 
-from typing import TYPE_CHECKING, Optional, Sequence, Tuple, Union, cast
+from functools import singledispatch
+from typing import Optional, Sequence, Tuple, Union
 
 import numpy as np
 
+from aesara import config
+from aesara import tensor as at
 from aesara.graph.basic import Variable
+from aesara.graph.op import Op, compute_test_value
+from aesara.tensor.random.op import RandomVariable
+from aesara.tensor.shape import SpecifyShape
 from aesara.tensor.var import TensorVariable
 from typing_extensions import TypeAlias
-
-from pymc.aesaraf import convert_observed_data
 
 __all__ = [
     "to_tuple",
@@ -36,7 +41,11 @@ __all__ = [
     "broadcast_distribution_samples",
     "broadcast_dist_samples_to",
     "rv_size_is_none",
+    "change_dist_size",
 ]
+
+from pymc.aesaraf import PotentialShapeType
+from pymc.exceptions import ShapeError
 
 
 def to_tuple(shape):
@@ -409,34 +418,18 @@ def broadcast_dist_samples_to(to_shape, samples, size=None):
     return [np.broadcast_to(o, to_shape) for o in samples]
 
 
-# Workaround to annotate the Ellipsis type, posted by the BDFL himself.
-# See https://github.com/python/typing/issues/684#issuecomment-548203158
-if TYPE_CHECKING:
-    from enum import Enum
-
-    class ellipsis(Enum):
-        Ellipsis = "..."
-
-    Ellipsis = ellipsis.Ellipsis
-else:
-    ellipsis = type(Ellipsis)
-
 # User-provided can be lazily specified as scalars
-Shape: TypeAlias = Union[int, TensorVariable, Sequence[Union[int, Variable, ellipsis]]]
-Dims: TypeAlias = Union[str, Sequence[Optional[Union[str, ellipsis]]]]
+Shape: TypeAlias = Union[int, TensorVariable, Sequence[Union[int, Variable]]]
+Dims: TypeAlias = Union[str, Sequence[Optional[str]]]
 Size: TypeAlias = Union[int, TensorVariable, Sequence[Union[int, Variable]]]
 
 # After conversion to vectors
-WeakShape: TypeAlias = Union[TensorVariable, Tuple[Union[int, Variable, ellipsis], ...]]
-WeakDims: TypeAlias = Tuple[Optional[Union[str, ellipsis]], ...]
-
-# After Ellipsis were substituted
 StrongShape: TypeAlias = Union[TensorVariable, Tuple[Union[int, Variable], ...]]
 StrongDims: TypeAlias = Sequence[Optional[str]]
 StrongSize: TypeAlias = Union[TensorVariable, Tuple[Union[int, Variable], ...]]
 
 
-def convert_dims(dims: Optional[Dims]) -> Optional[WeakDims]:
+def convert_dims(dims: Optional[Dims]) -> Optional[StrongDims]:
     """Process a user-provided dims variable into None or a valid dims tuple."""
     if dims is None:
         return None
@@ -448,13 +441,10 @@ def convert_dims(dims: Optional[Dims]) -> Optional[WeakDims]:
     else:
         raise ValueError(f"The `dims` parameter must be a tuple, str or list. Actual: {type(dims)}")
 
-    if any(d == Ellipsis for d in dims[:-1]):
-        raise ValueError(f"Ellipsis in `dims` may only appear in the last position. Actual: {dims}")
-
     return dims
 
 
-def convert_shape(shape: Shape) -> Optional[WeakShape]:
+def convert_shape(shape: Shape) -> Optional[StrongShape]:
     """Process a user-provided shape variable into None or a valid shape object."""
     if shape is None:
         return None
@@ -467,10 +457,6 @@ def convert_shape(shape: Shape) -> Optional[WeakShape]:
     else:
         raise ValueError(
             f"The `shape` parameter must be a tuple, TensorVariable, int or list. Actual: {type(shape)}"
-        )
-    if isinstance(shape, tuple) and any(s == Ellipsis for s in shape[:-1]):
-        raise ValueError(
-            f"Ellipsis in `shape` may only appear in the last position. Actual: {shape}"
         )
 
     return shape
@@ -490,85 +476,50 @@ def convert_size(size: Size) -> Optional[StrongSize]:
         raise ValueError(
             f"The `size` parameter must be a tuple, TensorVariable, int or list. Actual: {type(size)}"
         )
-    if isinstance(size, tuple) and Ellipsis in size:
-        raise ValueError(f"The `size` parameter cannot contain an Ellipsis. Actual: {size}")
 
     return size
 
 
-def resize_from_dims(dims: WeakDims, ndim_implied: int, model) -> Tuple[StrongSize, StrongDims]:
-    """Determines a potential resize shape from a `dims` tuple.
+def shape_from_dims(
+    dims: StrongDims, shape_implied: Sequence[TensorVariable], model
+) -> StrongShape:
+    """Determines shape from a `dims` tuple.
 
     Parameters
     ----------
     dims : array-like
-        A vector of dimension names, None or Ellipsis.
-    ndim_implied : int
-        Number of RV dimensions that were implied from its inputs alone.
+        A vector of dimension names or None.
+    shape_implied : tensor_like of int
+        Shape of RV implied from its inputs alone.
     model : pm.Model
         The current model on stack.
 
     Returns
     -------
-    resize_shape : array-like
-        Shape of new dimensions that should be prepended.
     dims : tuple of (str or None)
-        Names or None for all dimensions after resizing.
+        Names or None for all RV dimensions.
     """
-    if Ellipsis in dims:
-        # Auto-complete the dims tuple to the full length.
-        # We don't have a way to know the names of implied
-        # dimensions, so they will be `None`.
-        dims = (*dims[:-1], *[None] * ndim_implied)
-    sdims = cast(StrongDims, dims)
+    ndim_resize = len(dims) - len(shape_implied)
 
-    ndim_resize = len(sdims) - ndim_implied
-
-    # All resize dims must be known already (numerically or symbolically).
-    unknowndim_resize_dims = set(sdims[:ndim_resize]) - set(model.dim_lengths)
+    # Dims must be known already or be inferrable from implied dimensions of the RV
+    unknowndim_resize_dims = set(dims[:ndim_resize]) - set(model.dim_lengths)
     if unknowndim_resize_dims:
         raise KeyError(
             f"Dimensions {unknowndim_resize_dims} are unknown to the model and cannot be used to specify a `size`."
         )
 
     # The numeric/symbolic resize tuple can be created using model.RV_dim_lengths
-    resize_shape: Tuple[Variable, ...] = tuple(
-        model.dim_lengths[dname] for dname in sdims[:ndim_resize]
+    return tuple(
+        model.dim_lengths[dname] if dname in model.dim_lengths else shape_implied[i]
+        for i, dname in enumerate(dims)
     )
-    return resize_shape, sdims
-
-
-def resize_from_observed(
-    observed, ndim_implied: int
-) -> Tuple[StrongSize, Union[np.ndarray, Variable]]:
-    """Determines a potential resize shape from observations.
-
-    Parameters
-    ----------
-    observed : scalar, array-like
-        The value of the `observed` kwarg to the RV creation.
-    ndim_implied : int
-        Number of RV dimensions that were implied from its inputs alone.
-
-    Returns
-    -------
-    resize_shape : array-like
-        Shape of new dimensions that should be prepended.
-    observed : scalar, array-like
-        Observations as numpy array or `Variable`.
-    """
-    if not hasattr(observed, "shape"):
-        observed = convert_observed_data(observed)
-    ndim_resize = observed.ndim - ndim_implied
-    resize_shape = tuple(observed.shape[d] for d in range(ndim_resize))
-    return resize_shape, observed
 
 
 def find_size(
-    shape: Optional[WeakShape],
+    shape: Optional[StrongShape],
     size: Optional[StrongSize],
     ndim_supp: int,
-) -> Tuple[Optional[StrongSize], Optional[int], Optional[int], int]:
+) -> Optional[StrongSize]:
     """Determines the size keyword argument for creating a Distribution.
 
     Parameters
@@ -583,39 +534,135 @@ def find_size(
 
     Returns
     -------
-    create_size : int, optional
-        The size argument to be passed to the distribution
-    ndim_expected : int, optional
-        Number of dimensions expected after distribution was created
-    ndim_batch : int, optional
-        Number of batch dimensions
-    ndim_supp : int
-        Number of support dimensions
+    size : tuble of int or TensorVariable, optional
+        The size argument for creating the Distribution
     """
 
-    ndim_expected: Optional[int] = None
-    ndim_batch: Optional[int] = None
-    create_size: Optional[StrongSize] = None
+    if size is not None:
+        return size
 
     if shape is not None:
-        if Ellipsis in shape:
-            # Ellipsis short-hands all implied dimensions. Therefore
-            # we don't know how many dimensions to expect.
-            ndim_expected = ndim_batch = None
-            # Create the RV with its implied shape and resize later
-            create_size = None
-        else:
-            ndim_expected = len(tuple(shape))
-            ndim_batch = ndim_expected - ndim_supp
-            create_size = tuple(shape)[:ndim_batch]
-    elif size is not None:
-        ndim_expected = ndim_supp + len(tuple(size))
+        ndim_expected = len(tuple(shape))
         ndim_batch = ndim_expected - ndim_supp
-        create_size = size
+        return tuple(shape)[:ndim_batch]
 
-    return create_size, ndim_expected, ndim_batch, ndim_supp
+    return None
 
 
 def rv_size_is_none(size: Variable) -> bool:
     """Check wether an rv size is None (ie., at.Constant([]))"""
     return size.type.shape == (0,)  # type: ignore [attr-defined]
+
+
+@singledispatch
+def _change_dist_size(op: Op, dist: TensorVariable, new_size, expand):
+    raise NotImplementedError(
+        f"Variable {dist} of type {op} has no _change_dist_size implementation."
+    )
+
+
+def change_dist_size(
+    dist: TensorVariable,
+    new_size: PotentialShapeType,
+    expand: bool = False,
+) -> TensorVariable:
+    """Change or expand the size of a Distribution.
+
+    Parameters
+    ----------
+    dist:
+        The old distribution to be resized.
+    new_size:
+        The new size of the distribution.
+    expand: bool, optional
+        If True, `new_size` is prepended to the existing distribution `size`, so that
+        the final size is equal to (*new_size, *dist.size). Defaults to false.
+
+    Returns
+    -------
+    A new distribution variable that is equivalent to the original distribution with
+    the new size. The new distribution will not reuse the old RandomState/Generator
+    input, so it will be independent from the original distribution.
+
+    Examples
+    --------
+    .. code-block:: python
+        x = Normal.dist(shape=(2, 3))
+        new_x = change_dist_size(x, new_size=(5, 3), expand=False)
+        assert new_x.eval().shape == (5, 3)
+
+        new_x = change_dist_size(x, new_size=(5, 3), expand=True)
+        assert new_x.eval().shape == (5, 3, 2, 3)
+
+    """
+    # Check the dimensionality of the `new_size` kwarg
+    new_size_ndim = np.ndim(new_size)  # type: ignore
+    if new_size_ndim > 1:
+        raise ShapeError("The `new_size` must be ≤1-dimensional.", actual=new_size_ndim)
+    elif new_size_ndim == 0:
+        new_size = (new_size,)  # type: ignore
+    else:
+        new_size = tuple(new_size)  # type: ignore
+
+    new_dist = _change_dist_size(dist.owner.op, dist, new_size=new_size, expand=expand)
+
+    new_dist.name = dist.name
+    for k, v in dist.tag.__dict__.items():
+        new_dist.tag.__dict__.setdefault(k, v)
+
+    if config.compute_test_value != "off":
+        compute_test_value(new_dist)
+
+    return new_dist
+
+
+@_change_dist_size.register(RandomVariable)
+def change_rv_size(op, rv, new_size, expand) -> TensorVariable:
+    # Extract the RV node that is to be resized
+    rv_node = rv.owner
+    old_rng, old_size, dtype, *dist_params = rv_node.inputs
+
+    if expand:
+        shape = tuple(rv_node.op._infer_shape(old_size, dist_params))
+        old_size = shape[: len(shape) - rv_node.op.ndim_supp]
+        new_size = tuple(new_size) + tuple(old_size)
+
+    # Make sure the new size is a tensor. This dtype-aware conversion helps
+    # to not unnecessarily pick up a `Cast` in some cases (see #4652).
+    new_size = at.as_tensor(new_size, ndim=1, dtype="int64")
+
+    new_rv = rv_node.op(*dist_params, size=new_size, dtype=dtype)
+
+    # Replicate "traditional" rng default_update, if that was set for old_rng
+    default_update = getattr(old_rng, "default_update", None)
+    if default_update is not None:
+        if default_update is rv_node.outputs[0]:
+            new_rv.owner.inputs[0].default_update = new_rv.owner.outputs[0]
+        else:
+            warnings.warn(
+                f"Update expression of {rv} RNG could not be replicated in resized variable",
+                UserWarning,
+            )
+
+    return new_rv
+
+
+@_change_dist_size.register(SpecifyShape)
+def change_specify_shape_size(op, ss, new_size, expand) -> TensorVariable:
+    inner_var, *shapes = ss.owner.inputs
+    new_var = _change_dist_size(inner_var.owner.op, inner_var, new_size=new_size, expand=expand)
+
+    new_shapes = [None] * new_var.ndim
+    # Old specify_shape is still valid
+    if expand:
+        if len(shapes) > 0:
+            new_shapes[-len(shapes) :] = shapes
+    # Old specify_shape is still valid for support dimensions. We do not reintroduce
+    # checks for resized dimensions, although we could...
+    else:
+        ndim_supp = new_var.owner.op.ndim_supp
+        if ndim_supp > 0:
+            new_shapes[-ndim_supp:] = shapes[-ndim_supp:]
+
+    # specify_shape has a wrong signature https://github.com/aesara-devs/aesara/issues/1164
+    return at.specify_shape(new_var, new_shapes)  # type: ignore

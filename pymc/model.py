@@ -43,6 +43,8 @@ import scipy.sparse as sps
 from aesara.compile.sharedvalue import SharedVariable
 from aesara.graph.basic import Constant, Variable, graph_inputs
 from aesara.graph.fg import FunctionGraph
+from aesara.scalar import Cast
+from aesara.tensor.elemwise import Elemwise
 from aesara.tensor.random.rewriting import local_subtensor_rv_lift
 from aesara.tensor.sharedvar import ScalarSharedVariable
 from aesara.tensor.var import TensorConstant, TensorVariable
@@ -759,7 +761,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
         # Replace random variables by their value variables in potential terms
         potential_logps = []
         if potentials:
-            potential_logps, _ = rvs_to_value_vars(potentials, apply_transforms=True)
+            potential_logps = rvs_to_value_vars(potentials)
 
         logp_factors = [None] * len(varlist)
         for logp_order, logp in zip((rv_order + potential_order), (rv_logps + potential_logps)):
@@ -933,7 +935,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
         """Aesara scalar of log-probability of the Potential terms"""
         # Convert random variables in Potential expression into their log-likelihood
         # inputs and apply their transforms, if any
-        potentials, _ = rvs_to_value_vars(self.potentials, apply_transforms=True)
+        potentials = rvs_to_value_vars(self.potentials)
         if potentials:
             return at.sum([at.sum(factor) for factor in potentials])
         else:
@@ -974,10 +976,10 @@ class Model(WithMemoization, metaclass=ContextMeta):
             vars.append(value_var)
 
         # Remove rvs from untransformed values graph
-        untransformed_vars, _ = rvs_to_value_vars(untransformed_vars, apply_transforms=True)
+        untransformed_vars = rvs_to_value_vars(untransformed_vars)
 
         # Remove rvs from deterministics graph
-        deterministics, _ = rvs_to_value_vars(self.deterministics, apply_transforms=True)
+        deterministics = rvs_to_value_vars(self.deterministics)
 
         return vars + untransformed_vars + deterministics
 
@@ -1367,6 +1369,12 @@ class Model(WithMemoization, metaclass=ContextMeta):
                 isinstance(data, Variable)
                 and not isinstance(data, (GenTensorVariable, Minibatch))
                 and data.owner is not None
+                # The only Aesara operation we allow on observed data is type casting
+                # Although we could allow for any graph that does not depend on other RVs
+                and not (
+                    isinstance(data.owner.op, Elemwise)
+                    and isinstance(data.owner.op.scalar_op, Cast)
+                )
             ):
                 raise TypeError(
                     "Variables that depend on other nodes cannot be used for observed data."

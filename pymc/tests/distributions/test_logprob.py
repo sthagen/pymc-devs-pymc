@@ -31,6 +31,8 @@ from aesara.tensor.subtensor import (
     Subtensor,
 )
 
+import pymc as pm
+
 from pymc import DensityDist
 from pymc.aesaraf import floatX, walk_model
 from pymc.distributions.continuous import (
@@ -127,7 +129,7 @@ def test_joint_logp_basic():
     with pytest.warns(FutureWarning):
         b_logpt = joint_logpt(b, b_value_var, sum=False)
 
-    res_ancestors = list(walk_model(b_logp, walk_past_rvs=True))
+    res_ancestors = list(walk_model(b_logp))
     res_rv_ancestors = [
         v for v in res_ancestors if v.owner and isinstance(v.owner.op, RandomVariable)
     ]
@@ -349,3 +351,44 @@ def test_ignore_logprob_model():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert joint_logp([y], {y: y.type()})
+
+
+def test_hierarchical_logp():
+    """Make sure there are no random variables in a model's log-likelihood graph."""
+    with pm.Model() as m:
+        x = pm.Uniform("x", lower=0, upper=1)
+        y = pm.Uniform("y", lower=0, upper=x)
+
+    logp_ancestors = list(ancestors([m.logp()]))
+    ops = {a.owner.op for a in logp_ancestors if a.owner}
+    assert len(ops) > 0
+    assert not any(isinstance(o, RandomVariable) for o in ops)
+    assert x.tag.value_var in logp_ancestors
+    assert y.tag.value_var in logp_ancestors
+
+
+def test_hierarchical_obs_logp():
+    obs = np.array([0.5, 0.4, 5, 2])
+
+    with pm.Model() as model:
+        x = pm.Uniform("x", 0, 1, observed=obs)
+        pm.Uniform("y", x, 2, observed=obs)
+
+    logp_ancestors = list(ancestors([model.logp()]))
+    ops = {a.owner.op for a in logp_ancestors if a.owner}
+    assert len(ops) > 0
+    assert not any(isinstance(o, RandomVariable) for o in ops)
+
+
+def test_logprob_join_constant_shapes():
+    x = at.random.normal(size=5)
+    y = at.random.normal(size=3)
+    xy = at.join(x, y)
+    xy_vv = at.vector("xy_vv")
+
+    xy_logp = logp(xy, xy_vv)
+    # This is what Aeppl does not do!
+    assert_no_rvs(xy_logp)
+
+    f = aesara.function([xy_vv], xy_logp)
+    np.testing.assert_array_equal(f(np.zeros(8)), sp.norm.logpdf(np.zeros(8)))
