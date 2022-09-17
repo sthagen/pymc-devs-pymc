@@ -81,7 +81,6 @@ from pymc.distributions.distribution import (
     DensityDist,
     Discrete,
     Distribution,
-    NoDistribution,
     SymbolicRandomVariable,
 )
 from pymc.distributions.mixture import Mixture, NormalMixture
@@ -111,6 +110,7 @@ from pymc.distributions.timeseries import (
     MvStudentTRandomWalk,
     RandomWalk,
 )
+from pymc.distributions.truncated import Truncated
 
 __all__ = [
     "Uniform",
@@ -159,7 +159,6 @@ __all__ = [
     "SymbolicRandomVariable",
     "Continuous",
     "Discrete",
-    "NoDistribution",
     "MvNormal",
     "MatrixNormal",
     "KroneckerNormal",
@@ -194,6 +193,7 @@ __all__ = [
     "Rice",
     "Moyal",
     "Simulator",
+    "Truncated",
     "Censored",
     "CAR",
     "PolyaGamma",
