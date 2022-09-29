@@ -76,5 +76,9 @@ class DtypeError(TypeError):
             super().__init__(message)
 
 
-class TruncationError(Exception):
+class TruncationError(RuntimeError):
     """Exception for errors generated from truncated graphs"""
+
+
+class NotConstantValueError(ValueError):
+    pass
