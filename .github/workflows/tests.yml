@@ -43,7 +43,7 @@ jobs:
             pymc/tests/test_aesaraf.py
             pymc/tests/test_math.py
             pymc/tests/backends/test_ndarray.py
-            pymc/tests/test_hmc.py
+            pymc/tests/step_methods/hmc/test_hmc.py
             pymc/tests/test_func_utils.py
             pymc/tests/distributions/test_shape_utils.py
             pymc/tests/distributions/test_mixture.py
@@ -63,8 +63,7 @@ jobs:
           - |
             pymc/tests/tuning/test_scaling.py
             pymc/tests/tuning/test_starting.py
-            pymc/tests/test_shared.py
-            pymc/tests/test_types.py
+            pymc/tests/test_sampling.py
             pymc/tests/distributions/test_dist_math.py
             pymc/tests/distributions/test_transform.py
             pymc/tests/test_parallel_sampling.py
@@ -147,10 +146,10 @@ jobs:
         floatx: [float64]
         python-version: ["3.8"]
         test-subset:
-          - pymc/tests/test_variational_inference.py pymc/tests/test_initial_point.py
-          - pymc/tests/test_model.py pymc/tests/test_step.py
-          - pymc/tests/gp/test_cov.py pymc/tests/gp/test_gp.py pymc/tests/gp/test_mean.py pymc/tests/gp/test_util.py pymc/tests/ode/test_ode.py pymc/tests/ode/test_utils.py pymc/tests/test_smc.py pymc/tests/test_parallel_sampling.py
-          - pymc/tests/test_sampling.py pymc/tests/test_posteriors.py
+          - pymc/tests/variational/test_approximations.py pymc/tests/variational/test_callbacks.py pymc/tests/variational/test_inference.py pymc/tests/variational/test_opvi.py pymc/tests/test_initial_point.py
+          - pymc/tests/test_model.py pymc/tests/step_methods/test_compound.py pymc/tests/step_methods/hmc/test_hmc.py
+          - pymc/tests/gp/test_cov.py pymc/tests/gp/test_gp.py pymc/tests/gp/test_mean.py pymc/tests/gp/test_util.py pymc/tests/ode/test_ode.py pymc/tests/ode/test_utils.py pymc/tests/smc/test_smc.py pymc/tests/test_parallel_sampling.py
+          - pymc/tests/test_sampling.py pymc/tests/step_methods/test_metropolis.py pymc/tests/step_methods/test_slicer.py pymc/tests/step_methods/hmc/test_nuts.py
 
       fail-fast: false
     runs-on: ${{ matrix.os }}
@@ -222,7 +221,7 @@ jobs:
           - |
             pymc/tests/test_parallel_sampling.py
             pymc/tests/test_data.py
-            pymc/tests/test_missing.py
+            pymc/tests/test_model.py
 
           - |
             pymc/tests/test_sampling.py

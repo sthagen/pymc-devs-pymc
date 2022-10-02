@@ -17,6 +17,7 @@ import unittest.mock as mock
 import warnings
 
 from contextlib import ExitStack as does_not_raise
+from copy import copy
 from typing import Tuple
 
 import aesara
@@ -30,6 +31,7 @@ import xarray as xr
 
 from aesara import Mode, shared
 from aesara.compile import SharedVariable
+from aesara.compile.ops import as_op
 from arviz import InferenceData
 from arviz import from_dict as az_from_dict
 from arviz.tests.helpers import check_multiple_attrs
@@ -42,7 +44,19 @@ from pymc.backends.base import MultiTrace
 from pymc.backends.ndarray import NDArray
 from pymc.distributions import transforms
 from pymc.exceptions import IncorrectArgumentsError, SamplingError
-from pymc.sampling import _get_seeds_per_chain, compile_forward_sampling_function
+from pymc.sampling import (
+    _get_seeds_per_chain,
+    assign_step_methods,
+    compile_forward_sampling_function,
+)
+from pymc.step_methods import (
+    NUTS,
+    BinaryGibbsMetropolis,
+    CategoricalGibbsMetropolis,
+    HamiltonianMC,
+    Metropolis,
+    Slice,
+)
 from pymc.tests.helpers import SeededTest, fast_unstable_sampling_mode
 from pymc.tests.models import simple_init
 
@@ -1086,33 +1100,6 @@ class TestSamplePPC(SeededTest):
         assert caplog.record_tuples == [("pymc", logging.INFO, "Sampling: [x, y, z]")]
         caplog.clear()
 
-    def test_logging_sampled_basic_rvs_posterior_mutable(self, caplog):
-        with pm.Model() as m:
-            x1 = pm.MutableData("x1", 0)
-            y1 = pm.Normal("y1", x1)
-
-            x2 = pm.ConstantData("x2", 0)
-            y2 = pm.Normal("y2", x2)
-
-            z = pm.Normal("z", y1 + y2, observed=0)
-
-        # `y1` will be recomputed because it depends on a `MutableData` whereas `y2` won't
-        # This behavior might change in the future, as it is undesirable when `MutableData`
-        # hasn't changed since sampling
-        idata = az_from_dict(posterior={"y1": np.zeros(5), "y2": np.zeros(5)})
-        with m:
-            pm.sample_posterior_predictive(idata)
-        assert caplog.record_tuples == [("pymc", logging.INFO, "Sampling: [y1, z]")]
-        caplog.clear()
-
-        # `y1` should now be resampled regardless of whether it was in the trace or not
-        # as the posterior is no longer revelant!
-        x1.set_value(1)
-        with m:
-            pm.sample_posterior_predictive(idata)
-        assert caplog.record_tuples == [("pymc", logging.INFO, "Sampling: [y1, z]")]
-        caplog.clear()
-
     def test_logging_sampled_basic_rvs_posterior_deterministic(self, caplog):
         with pm.Model() as m:
             x = pm.Normal("x")
@@ -1127,6 +1114,131 @@ class TestSamplePPC(SeededTest):
             pm.sample_posterior_predictive(idata, var_names=["x_det", "z"])
         assert caplog.record_tuples == [("pymc", logging.INFO, "Sampling: [y, z]")]
         caplog.clear()
+
+    @staticmethod
+    def make_mock_model():
+        rng = np.random.default_rng(seed=42)
+        data = rng.normal(loc=1, scale=0.2, size=(10, 3))
+        with pm.Model() as model:
+            model.add_coord("name", ["A", "B", "C"], mutable=True)
+            model.add_coord("obs", list(range(10, 20)), mutable=True)
+            offsets = pm.MutableData("offsets", rng.normal(0, 1, size=(10,)))
+            a = pm.Normal("a", mu=0, sigma=1, dims=["name"])
+            b = pm.Normal("b", mu=offsets, sigma=1)
+            mu = pm.Deterministic("mu", a + b[..., None], dims=["obs", "name"])
+            sigma = pm.HalfNormal("sigma", sigma=1, dims=["name"])
+
+            data = pm.MutableData(
+                "y_obs",
+                data,
+                dims=["obs", "name"],
+            )
+            pm.Normal("y", mu=mu, sigma=sigma, observed=data, dims=["obs", "name"])
+        return model
+
+    @pytest.fixture(scope="class")
+    def mock_multitrace(self):
+        with self.make_mock_model():
+            trace = pm.sample(
+                draws=10,
+                tune=10,
+                chains=2,
+                progressbar=False,
+                compute_convergence_checks=False,
+                return_inferencedata=False,
+                random_seed=42,
+            )
+        return trace
+
+    @pytest.fixture(scope="class", params=["MultiTrace", "InferenceData", "Dataset"])
+    def mock_sample_results(self, request, mock_multitrace):
+        kind = request.param
+        trace = mock_multitrace
+        # We rebuild the class to ensure that all dimensions, data and coords start out
+        # the same across params values
+        model = self.make_mock_model()
+        if kind == "MultiTrace":
+            return kind, trace, model
+        else:
+            idata = pm.to_inference_data(
+                trace,
+                save_warmup=False,
+                model=model,
+                log_likelihood=False,
+            )
+            if kind == "Dataset":
+                return kind, idata.posterior, model
+            else:
+                return kind, idata, model
+
+    def test_logging_sampled_basic_rvs_posterior_mutable(self, mock_sample_results, caplog):
+        kind, samples, model = mock_sample_results
+        with model:
+            pm.sample_posterior_predictive(samples)
+        if kind == "MultiTrace":
+            # MultiTrace will only have the actual MCMC posterior samples but no information on
+            # the MutableData and mutable coordinate values, so it will always assume they are volatile
+            # and resample their descendants
+            assert caplog.record_tuples == [("pymc", logging.INFO, "Sampling: [a, b, sigma, y]")]
+            caplog.clear()
+        elif kind == "InferenceData":
+            # InferenceData has all MCMC posterior samples and the values for both coordinates and
+            # data containers. This enables it to see that no data has changed and it should only
+            # resample the observed variable
+            assert caplog.record_tuples == [("pymc", logging.INFO, "Sampling: [y]")]
+            caplog.clear()
+        elif kind == "Dataset":
+            # Dataset has all MCMC posterior samples and the values of the coordinates. This
+            # enables it to see that the coordinates have not changed, but the MutableData is
+            # assumed volatile by default
+            assert caplog.record_tuples == [("pymc", logging.INFO, "Sampling: [b, y]")]
+            caplog.clear()
+
+        original_offsets = model["offsets"].get_value()
+        with model:
+            # Changing the MutableData values. This will only be picked up by InferenceData
+            pm.set_data({"offsets": original_offsets + 1})
+            pm.sample_posterior_predictive(samples)
+        if kind == "MultiTrace":
+            assert caplog.record_tuples == [("pymc", logging.INFO, "Sampling: [a, b, sigma, y]")]
+            caplog.clear()
+        elif kind == "InferenceData":
+            assert caplog.record_tuples == [("pymc", logging.INFO, "Sampling: [b, y]")]
+            caplog.clear()
+        elif kind == "Dataset":
+            assert caplog.record_tuples == [("pymc", logging.INFO, "Sampling: [b, y]")]
+            caplog.clear()
+
+        with model:
+            # Changing the mutable coordinates. This will be picked up by InferenceData and Dataset
+            model.set_dim("name", new_length=4, coord_values=["D", "E", "F", "G"])
+            pm.set_data({"offsets": original_offsets, "y_obs": np.zeros((10, 4))})
+            pm.sample_posterior_predictive(samples)
+        if kind == "MultiTrace":
+            assert caplog.record_tuples == [("pymc", logging.INFO, "Sampling: [a, b, sigma, y]")]
+            caplog.clear()
+        elif kind == "InferenceData":
+            assert caplog.record_tuples == [("pymc", logging.INFO, "Sampling: [a, sigma, y]")]
+            caplog.clear()
+        elif kind == "Dataset":
+            assert caplog.record_tuples == [("pymc", logging.INFO, "Sampling: [a, b, sigma, y]")]
+            caplog.clear()
+
+        with model:
+            # Changing the mutable coordinate values, but not shape, and also changing MutableData.
+            # This will trigger resampling of all variables
+            model.set_dim("name", new_length=3, coord_values=["A", "B", "D"])
+            pm.set_data({"offsets": original_offsets + 1, "y_obs": np.zeros((10, 3))})
+            pm.sample_posterior_predictive(samples)
+        if kind == "MultiTrace":
+            assert caplog.record_tuples == [("pymc", logging.INFO, "Sampling: [a, b, sigma, y]")]
+            caplog.clear()
+        elif kind == "InferenceData":
+            assert caplog.record_tuples == [("pymc", logging.INFO, "Sampling: [a, b, sigma, y]")]
+            caplog.clear()
+        elif kind == "Dataset":
+            assert caplog.record_tuples == [("pymc", logging.INFO, "Sampling: [a, b, sigma, y]")]
+            caplog.clear()
 
 
 @pytest.mark.xfail(
@@ -1939,6 +2051,95 @@ class TestCompileForwardSampler:
         assert {i.name for i in self.get_function_inputs(f)} == set()
         assert {i.name for i in self.get_function_roots(f)} == set()
 
+    def test_mutable_coords_volatile(self):
+        rng = np.random.default_rng(seed=42)
+        data = rng.normal(loc=1, scale=0.2, size=(10, 3))
+        with pm.Model() as model:
+            model.add_coord("name", ["A", "B", "C"], mutable=True)
+            model.add_coord("obs", list(range(10, 20)), mutable=True)
+            offsets = pm.MutableData("offsets", rng.normal(0, 1, size=(10,)))
+            a = pm.Normal("a", mu=0, sigma=1, dims=["name"])
+            b = pm.Normal("b", mu=offsets, sigma=1)
+            mu = pm.Deterministic("mu", a + b[..., None], dims=["obs", "name"])
+            sigma = pm.HalfNormal("sigma", sigma=1, dims=["name"])
+
+            data = pm.MutableData(
+                "y_obs",
+                data,
+                dims=["obs", "name"],
+            )
+            y = pm.Normal("y", mu=mu, sigma=sigma, observed=data, dims=["obs", "name"])
+
+        # When no constant_data and constant_coords, all the dependent nodes will be volatile and
+        # resampled
+        f, volatile_rvs = compile_forward_sampling_function(
+            outputs=[y],
+            vars_in_trace=[a, b, mu, sigma],
+            basic_rvs=model.basic_RVs,
+        )
+        assert volatile_rvs == {y, a, b, sigma}
+        assert {i.name for i in self.get_function_inputs(f)} == set()
+        assert {i.name for i in self.get_function_roots(f)} == {"name", "obs", "offsets"}
+
+        # When the constant data has the same values as the shared data, offsets wont be volatile
+        f, volatile_rvs = compile_forward_sampling_function(
+            outputs=[y],
+            vars_in_trace=[a, b, mu, sigma],
+            basic_rvs=model.basic_RVs,
+            constant_data={"offsets": offsets.get_value()},
+        )
+        assert volatile_rvs == {y, a, sigma}
+        assert {i.name for i in self.get_function_inputs(f)} == {"b"}
+        assert {i.name for i in self.get_function_roots(f)} == {"b", "name", "obs"}
+
+        # When we declare constant_coords, the shared variables with matching names wont be volatile
+        f, volatile_rvs = compile_forward_sampling_function(
+            outputs=[y],
+            vars_in_trace=[a, b, mu, sigma],
+            basic_rvs=model.basic_RVs,
+            constant_coords={"name", "obs"},
+        )
+        assert volatile_rvs == {y, b}
+        assert {i.name for i in self.get_function_inputs(f)} == {"a", "sigma"}
+        assert {i.name for i in self.get_function_roots(f)} == {
+            "a",
+            "sigma",
+            "name",
+            "obs",
+            "offsets",
+        }
+
+        # When we have both constant_data and constant_coords, only y will be volatile
+        f, volatile_rvs = compile_forward_sampling_function(
+            outputs=[y],
+            vars_in_trace=[a, b, mu, sigma],
+            basic_rvs=model.basic_RVs,
+            constant_data={"offsets": offsets.get_value()},
+            constant_coords={"name", "obs"},
+        )
+        assert volatile_rvs == {y}
+        assert {i.name for i in self.get_function_inputs(f)} == {"a", "b", "mu", "sigma"}
+        assert {i.name for i in self.get_function_roots(f)} == {"mu", "sigma", "name", "obs"}
+
+        # When constant_data has different values than the shared variable, then
+        # offsets will be volatile
+        f, volatile_rvs = compile_forward_sampling_function(
+            outputs=[y],
+            vars_in_trace=[a, b, mu, sigma],
+            basic_rvs=model.basic_RVs,
+            constant_data={"offsets": offsets.get_value() + 1},
+            constant_coords={"name", "obs"},
+        )
+        assert volatile_rvs == {y, b}
+        assert {i.name for i in self.get_function_inputs(f)} == {"a", "sigma"}
+        assert {i.name for i in self.get_function_roots(f)} == {
+            "a",
+            "sigma",
+            "name",
+            "obs",
+            "offsets",
+        }
+
 
 def test_get_seeds_per_chain():
     ret = _get_seeds_per_chain(None, chains=1)
@@ -2284,3 +2485,161 @@ class TestNestedRandom(SeededTest):
             prior_samples=prior_samples,
         )
         assert prior["target"].shape == (prior_samples,) + shape
+
+
+class TestAssignStepMethods:
+    def test_bernoulli(self):
+        """Test bernoulli distribution is assigned binary gibbs metropolis method"""
+        with pm.Model() as model:
+            pm.Bernoulli("x", 0.5)
+            with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+                steps = assign_step_methods(model, [])
+        assert isinstance(steps, BinaryGibbsMetropolis)
+
+    def test_normal(self):
+        """Test normal distribution is assigned NUTS method"""
+        with pm.Model() as model:
+            pm.Normal("x", 0, 1)
+            with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+                steps = assign_step_methods(model, [])
+        assert isinstance(steps, NUTS)
+
+    def test_categorical(self):
+        """Test categorical distribution is assigned categorical gibbs metropolis method"""
+        with pm.Model() as model:
+            pm.Categorical("x", np.array([0.25, 0.75]))
+            with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+                steps = assign_step_methods(model, [])
+        assert isinstance(steps, BinaryGibbsMetropolis)
+        with pm.Model() as model:
+            pm.Categorical("y", np.array([0.25, 0.70, 0.05]))
+            with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+                steps = assign_step_methods(model, [])
+        assert isinstance(steps, CategoricalGibbsMetropolis)
+
+    def test_binomial(self):
+        """Test binomial distribution is assigned metropolis method."""
+        with pm.Model() as model:
+            pm.Binomial("x", 10, 0.5)
+            with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+                steps = assign_step_methods(model, [])
+        assert isinstance(steps, Metropolis)
+
+    def test_normal_nograd_op(self):
+        """Test normal distribution without an implemented gradient is assigned slice method"""
+        with pm.Model() as model:
+            x = pm.Normal("x", 0, 1)
+
+            # a custom Aesara Op that does not have a grad:
+            is_64 = aesara.config.floatX == "float64"
+            itypes = [at.dscalar] if is_64 else [at.fscalar]
+            otypes = [at.dscalar] if is_64 else [at.fscalar]
+
+            @as_op(itypes, otypes)
+            def kill_grad(x):
+                return x
+
+            data = np.random.normal(size=(100,))
+            pm.Normal("y", mu=kill_grad(x), sigma=1, observed=data.astype(aesara.config.floatX))
+
+            with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+                steps = assign_step_methods(model, [])
+        assert isinstance(steps, Slice)
+
+    def test_modify_step_methods(self):
+        """Test step methods can be changed"""
+        # remove nuts from step_methods
+        step_methods = list(pm.STEP_METHODS)
+        step_methods.remove(NUTS)
+        pm.STEP_METHODS = step_methods
+
+        with pm.Model() as model:
+            pm.Normal("x", 0, 1)
+            with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+                steps = assign_step_methods(model, [])
+        assert not isinstance(steps, NUTS)
+
+        # add back nuts
+        pm.STEP_METHODS = step_methods + [NUTS]
+
+        with pm.Model() as model:
+            pm.Normal("x", 0, 1)
+            with aesara.config.change_flags(mode=fast_unstable_sampling_mode):
+                steps = assign_step_methods(model, [])
+        assert isinstance(steps, NUTS)
+
+
+class TestType:
+    samplers = (Metropolis, Slice, HamiltonianMC, NUTS)
+
+    def setup_method(self):
+        # save Aesara config object
+        self.aesara_config = copy(aesara.config)
+
+    def teardown_method(self):
+        # restore aesara config
+        aesara.config = self.aesara_config
+
+    @aesara.config.change_flags({"floatX": "float64", "warn_float64": "ignore"})
+    def test_float64(self):
+        with pm.Model() as model:
+            x = pm.Normal("x", initval=np.array(1.0, dtype="float64"))
+            obs = pm.Normal("obs", mu=x, sigma=1.0, observed=np.random.randn(5))
+
+        assert x.dtype == "float64"
+        assert obs.dtype == "float64"
+
+        for sampler in self.samplers:
+            with model:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", ".*number of samples.*", UserWarning)
+                    pm.sample(draws=10, tune=10, chains=1, step=sampler())
+
+    @aesara.config.change_flags({"floatX": "float32", "warn_float64": "warn"})
+    def test_float32(self):
+        with pm.Model() as model:
+            x = pm.Normal("x", initval=np.array(1.0, dtype="float32"))
+            obs = pm.Normal("obs", mu=x, sigma=1.0, observed=np.random.randn(5).astype("float32"))
+
+        assert x.dtype == "float32"
+        assert obs.dtype == "float32"
+
+        for sampler in self.samplers:
+            with model:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", ".*number of samples.*", UserWarning)
+                    pm.sample(draws=10, tune=10, chains=1, step=sampler())
+
+
+class TestShared(SeededTest):
+    def test_sample(self):
+        x = np.random.normal(size=100)
+        y = x + np.random.normal(scale=1e-2, size=100)
+
+        x_pred = np.linspace(-3, 3, 200)
+
+        x_shared = aesara.shared(x)
+
+        with pm.Model() as model:
+            b = pm.Normal("b", 0.0, 10.0)
+            pm.Normal("obs", b * x_shared, np.sqrt(1e-2), observed=y, shape=x_shared.shape)
+            prior_trace0 = pm.sample_prior_predictive(1000)
+
+            idata = pm.sample(1000, tune=1000, chains=1)
+            pp_trace0 = pm.sample_posterior_predictive(idata)
+
+            x_shared.set_value(x_pred)
+            prior_trace1 = pm.sample_prior_predictive(1000)
+            pp_trace1 = pm.sample_posterior_predictive(idata)
+
+        assert prior_trace0.prior["b"].shape == (1, 1000)
+        assert prior_trace0.prior_predictive["obs"].shape == (1, 1000, 100)
+        np.testing.assert_allclose(
+            x, pp_trace0.posterior_predictive["obs"].mean(("chain", "draw")), atol=1e-1
+        )
+
+        assert prior_trace1.prior["b"].shape == (1, 1000)
+        assert prior_trace1.prior_predictive["obs"].shape == (1, 1000, 200)
+        np.testing.assert_allclose(
+            x_pred, pp_trace1.posterior_predictive["obs"].mean(("chain", "draw")), atol=1e-1
+        )

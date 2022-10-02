@@ -11,20 +11,39 @@
 #   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
-import logging
+
 import warnings
 
 import numpy as np
 import numpy.testing as npt
+import pytest
 
-import pymc
+import pymc as pm
 
 from pymc.aesaraf import floatX
 from pymc.blocking import DictToArrayBijection, RaveledVars
+from pymc.step_methods.hmc import HamiltonianMC
 from pymc.step_methods.hmc.base_hmc import BaseHMC
 from pymc.tests import models
+from pymc.tests.helpers import RVsAssignmentStepsTester, StepMethodTester
 
-logger = logging.getLogger("pymc")
+
+class TestStepHamiltonianMC(StepMethodTester):
+    @pytest.mark.parametrize(
+        "step_fn, draws",
+        [
+            (lambda C, _: HamiltonianMC(scaling=C, is_cov=True, blocked=False), 1000),
+            (lambda C, _: HamiltonianMC(scaling=C, is_cov=True), 1000),
+        ],
+    )
+    def test_step_continuous(self, step_fn, draws):
+        self.step_continuous(step_fn, draws)
+
+
+class TestRVsAssignmentHamiltonianMC(RVsAssignmentStepsTester):
+    @pytest.mark.parametrize("step, step_kwargs", [(HamiltonianMC, {})])
+    def test_continuous_steps(self, step, step_kwargs):
+        self.continuous_steps(step, step_kwargs)
 
 
 def test_leapfrog_reversible():
@@ -57,12 +76,12 @@ def test_leapfrog_reversible():
 
 
 def test_nuts_tuning():
-    with pymc.Model():
-        pymc.Normal("mu", mu=0, sigma=1)
-        step = pymc.NUTS()
+    with pm.Model():
+        pm.Normal("mu", mu=0, sigma=1)
+        step = pm.NUTS()
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", ".*number of samples.*", UserWarning)
-            idata = pymc.sample(
+            idata = pm.sample(
                 10, step=step, tune=5, discard_tuned_samples=False, progressbar=False, chains=1
             )
 
