@@ -50,6 +50,7 @@ from pymc.sampling import (
     compile_forward_sampling_function,
     get_vars_in_point_list,
 )
+from pymc.stats.convergence import SamplerWarning, WarningType
 from pymc.step_methods import (
     NUTS,
     BinaryGibbsMetropolis,
@@ -1621,6 +1622,22 @@ class TestSamplePosteriorPredictive:
 
         assert np.all(pp["y"] == np.arange(5) * 2)
 
+    def test_sample_dims(self, point_list_arg_bug_fixture):
+        pmodel, trace = point_list_arg_bug_fixture
+        with pmodel:
+            post = pm.to_inference_data(trace).posterior.stack(sample=["chain", "draw"])
+            pp = pm.sample_posterior_predictive(post, var_names=["d"], sample_dims=["sample"])
+            assert "sample" in pp.posterior_predictive
+            assert len(pp.posterior_predictive["sample"]) == len(post["sample"])
+            post = post.expand_dims(pred_id=5)
+            pp = pm.sample_posterior_predictive(
+                post, var_names=["d"], sample_dims=["sample", "pred_id"]
+            )
+            assert "sample" in pp.posterior_predictive
+            assert "pred_id" in pp.posterior_predictive
+            assert len(pp.posterior_predictive["sample"]) == len(post["sample"])
+            assert len(pp.posterior_predictive["pred_id"]) == 5
+
 
 class TestDraw(SeededTest):
     def test_univariate(self):
@@ -1719,6 +1736,109 @@ def test_step_args():
     npt.assert_almost_equal(idata0.sample_stats.acceptance_rate.mean(), 0.5, decimal=1)
     npt.assert_almost_equal(idata1.sample_stats.acceptance_rate.mean(), 0.5, decimal=1)
     npt.assert_allclose(idata1.sample_stats.scaling, 0)
+
+
+def test_log_warning_stats(caplog):
+    s1 = dict(warning="Temperature too low!")
+    s2 = dict(warning="Temperature too high!")
+    stats = [s1, s2]
+
+    with caplog.at_level(logging.WARNING):
+        pm.sampling.log_warning_stats(stats)
+
+    # We have a list of stats dicts, because there might be several samplers involved.
+    assert "too low" in caplog.records[0].message
+    assert "too high" in caplog.records[1].message
+
+
+def test_log_warning_stats_knows_SamplerWarning(caplog):
+    """Checks that SamplerWarning "warning" stats get special treatment."""
+    stats = [dict(warning=SamplerWarning(WarningType.BAD_ENERGY, "Not that interesting", "debug"))]
+
+    with caplog.at_level(logging.DEBUG, logger="pymc"):
+        pm.sampling.log_warning_stats(stats)
+
+    assert "Not that interesting" in caplog.records[0].message
+
+
+class ApolypticMetropolis(pm.Metropolis):
+    """A stepper that warns in every iteration."""
+
+    stats_dtypes = [
+        {
+            **pm.Metropolis.stats_dtypes[0],
+            "warning": SamplerWarning,
+        }
+    ]
+
+    def astep(self, q0):
+        draw, stats = super().astep(q0)
+        stats[0]["warning"] = SamplerWarning(
+            WarningType.BAD_ENERGY,
+            "Asteroid incoming!",
+            "warn",
+        )
+        return draw, stats
+
+
+@pytest.mark.parametrize("cores", [1, 2])
+def test_logs_sampler_warnings(caplog, cores):
+    """Asserts that "warning" sampler stats are logged during sampling."""
+    with pm.Model():
+        pm.Normal("n")
+        with caplog.at_level(logging.WARNING):
+            idata = pm.sample(
+                tune=2,
+                draws=3,
+                cores=cores,
+                chains=cores,
+                step=ApolypticMetropolis(),
+                compute_convergence_checks=False,
+                discard_tuned_samples=False,
+                keep_warning_stat=True,
+            )
+
+    # Sampler warnings should be logged
+    nwarns = sum("Asteroid" in rec.message for rec in caplog.records)
+    assert nwarns == (2 + 3) * cores
+
+
+@pytest.mark.parametrize("keep_warning_stat", [None, True])
+def test_keep_warning_stat_setting(keep_warning_stat):
+    """The ``keep_warning_stat`` stat (aka "Adrian's kwarg) enables users
+    to keep the ``SamplerWarning`` objects from the ``sample_stats.warning`` group.
+    This breaks ``idata.to_netcdf()`` which is why it defaults to ``False``.
+    """
+    sample_kwargs = dict(
+        tune=2,
+        draws=3,
+        chains=1,
+        compute_convergence_checks=False,
+        discard_tuned_samples=False,
+        keep_warning_stat=keep_warning_stat,
+    )
+    if keep_warning_stat:
+        sample_kwargs["keep_warning_stat"] = True
+    with pm.Model():
+        pm.Normal("n")
+        idata = pm.sample(step=ApolypticMetropolis(), **sample_kwargs)
+
+    if keep_warning_stat:
+        assert "warning" in idata.warmup_sample_stats
+        assert "warning" in idata.sample_stats
+        # And end up in the InferenceData
+        assert "warning" in idata.sample_stats
+        # NOTE: The stats are squeezed by default but this does not always work.
+        #       This tests flattens so we don't have to be exact in accessing (non-)squeezed items.
+        #       Also see https://github.com/pymc-devs/pymc/issues/6207.
+        warn_objs = list(idata.sample_stats.warning.sel(chain=0).values.flatten())
+        assert any(isinstance(w, SamplerWarning) for w in warn_objs)
+        assert any("Asteroid" in w.message for w in warn_objs)
+    else:
+        assert "warning" not in idata.warmup_sample_stats
+        assert "warning" not in idata.sample_stats
+        assert "warning_dim_0" not in idata.warmup_sample_stats
+        assert "warning_dim_0" not in idata.sample_stats
 
 
 def test_init_nuts(caplog):
