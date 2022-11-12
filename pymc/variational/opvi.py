@@ -64,10 +64,11 @@ from pymc.aesaraf import (
     find_rng_nodes,
     identity,
     reseed_rngs,
-    rvs_to_value_vars,
 )
-from pymc.backends import NDArray
+from pymc.backends.base import MultiTrace
+from pymc.backends.ndarray import NDArray
 from pymc.blocking import DictToArrayBijection
+from pymc.distributions.logprob import _get_scaling
 from pymc.initial_point import make_initial_point_fn
 from pymc.model import modelcontext
 from pymc.util import (
@@ -1038,7 +1039,14 @@ class Group(WithMemoization):
     @node_property
     def symbolic_normalizing_constant(self):
         """*Dev* - normalizing constant for `self.logq`, scales it to `minibatch_size` instead of `total_size`"""
-        t = self.to_flat_input(at.max([v.tag.scaling for v in self.group]))
+        t = self.to_flat_input(
+            at.max(
+                [
+                    _get_scaling(self.model.rvs_to_total_sizes.get(v, None), v.shape, v.ndim)
+                    for v in self.group
+                ]
+            )
+        )
         t = self.symbolic_single_sample(t)
         return pm.floatX(t)
 
@@ -1170,7 +1178,14 @@ class Approximation(WithMemoization):
         """
         t = at.max(
             self.collect("symbolic_normalizing_constant")
-            + [var.tag.scaling for var in self.model.observed_RVs]
+            + [
+                _get_scaling(
+                    self.model.rvs_to_total_sizes.get(obs, None),
+                    obs.shape,
+                    obs.ndim,
+                )
+                for obs in self.model.observed_RVs
+            ]
         )
         t = at.switch(self._scale_cost_to_minibatch, t, at.constant(1, dtype=t.dtype))
         return pm.floatX(t)
@@ -1390,7 +1405,7 @@ class Approximation(WithMemoization):
             node = aesara.clone_replace(node, more_replacements)
         if not isinstance(node, (list, tuple)):
             node = [node]
-        node = rvs_to_value_vars(node)
+        node = self.model.replace_rvs_by_values(node)
         if not isinstance(node_in, (list, tuple)):
             node = node[0]
         if size is None:
@@ -1477,7 +1492,7 @@ class Approximation(WithMemoization):
         finally:
             trace.close()
 
-        trace = pm.sampling.MultiTrace([trace])
+        trace = MultiTrace([trace])
         if not return_inferencedata:
             return trace
         else:

@@ -28,14 +28,13 @@ from scipy.stats import multivariate_normal
 from pymc.aesaraf import (
     compile_pymc,
     floatX,
-    inputvars,
     join_nonshared_inputs,
     make_shared_replacements,
 )
 from pymc.backends.ndarray import NDArray
 from pymc.blocking import DictToArrayBijection
 from pymc.model import Point, modelcontext
-from pymc.sampling_forward import sample_prior_predictive
+from pymc.sampling.forward import sample_prior_predictive
 from pymc.step_methods.metropolis import MultivariateNormalProposal
 from pymc.vartypes import discrete_types
 
@@ -160,7 +159,7 @@ class SMC_KERNEL(ABC):
         self.rng = np.random.default_rng(seed=random_seed)
 
         self.model = modelcontext(model)
-        self.variables = inputvars(self.model.value_vars)
+        self.variables = self.model.value_vars
 
         self.var_info = {}
         self.tempered_posterior = None
