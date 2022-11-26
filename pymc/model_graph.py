@@ -200,10 +200,10 @@ class ModelGraph:
 
         for var_name in self.vars_to_plot(var_names):
             v = self.model[var_name]
-            if var_name in self.model.RV_dims:
+            if var_name in self.model.named_vars_to_dims:
                 plate_label = " x ".join(
                     f"{d} ({self._eval(self.model.dim_lengths[d])})"
-                    for d in self.model.RV_dims[var_name]
+                    for d in self.model.named_vars_to_dims[var_name]
                 )
             else:
                 plate_label = " x ".join(map(str, self._eval(v.shape)))
@@ -355,7 +355,7 @@ def model_to_networkx(
 
         model_to_networkx(schools)
     """
-    if not "plain" in formatting:
+    if "plain" not in formatting:
 
         raise ValueError(f"Unsupported formatting for graph nodes: '{formatting}'. See docstring.")
 
@@ -419,7 +419,7 @@ def model_to_graphviz(
 
         model_to_graphviz(schools)
     """
-    if not "plain" in formatting:
+    if "plain" not in formatting:
         raise ValueError(f"Unsupported formatting for graph nodes: '{formatting}'. See docstring.")
     if formatting != "plain":
         warnings.warn(
