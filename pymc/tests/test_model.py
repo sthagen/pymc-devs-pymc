@@ -216,8 +216,8 @@ class TestObserved:
             x1 = pm.Normal("x1", observed=X_)
             x2 = pm.Normal("x2", observed=X)
 
-        assert x1.type == X.type
-        assert x2.type == X.type
+        assert x1.type.dtype == X.type.dtype
+        assert x2.type.dtype == X.type.dtype
 
 
 def test_duplicate_vars():
@@ -844,6 +844,30 @@ def test_set_dim_with_coords():
     assert pmodel.coords["mdim"] == ("A", "B", "C")
 
 
+def test_add_named_variable_checks_dim_name():
+    with pm.Model() as pmodel:
+        rv = pm.Normal.dist(mu=[1, 2])
+
+        # Checks that vars are named
+        with pytest.raises(ValueError, match="is unnamed"):
+            pmodel.add_named_variable(rv)
+        rv.name = "nomnom"
+
+        # Coords must be available already
+        with pytest.raises(ValueError, match="not specified in `coords`"):
+            pmodel.add_named_variable(rv, dims="nomnom")
+        pmodel.add_coord("nomnom", [1, 2])
+
+        # No name collisions
+        with pytest.raises(ValueError, match="same name as"):
+            pmodel.add_named_variable(rv, dims="nomnom")
+
+        # This should work (regression test against #6335)
+        rv2 = rv[:, None]
+        rv2.name = "yumyum"
+        pmodel.add_named_variable(rv2, dims=("nomnom", None))
+
+
 def test_set_data_indirect_resize():
     with pm.Model() as pmodel:
         pmodel.add_coord("mdim", mutable=True, length=2)
@@ -911,7 +935,7 @@ def test_set_data_constant_shape_error():
         pmodel.add_coord("weekday", length=x.shape[0])
         pm.MutableData("y", np.arange(7), dims="weekday")
 
-    msg = "because the dimension was initialized from 'x' which is not a shared variable"
+    msg = "because the dimension length is tied to a TensorConstant"
     with pytest.raises(ShapeError, match=msg):
         pmodel.set_data("y", np.arange(10))
 
