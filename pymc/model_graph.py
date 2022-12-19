@@ -16,14 +16,14 @@ import warnings
 from collections import defaultdict
 from typing import Dict, Iterable, List, NewType, Optional, Sequence, Set
 
-from aesara import function
-from aesara.compile.sharedvalue import SharedVariable
-from aesara.graph import Apply
-from aesara.graph.basic import ancestors, walk
-from aesara.scalar.basic import Cast
-from aesara.tensor.elemwise import Elemwise
-from aesara.tensor.random.op import RandomVariable
-from aesara.tensor.var import TensorConstant, TensorVariable
+from pytensor import function
+from pytensor.compile.sharedvalue import SharedVariable
+from pytensor.graph import Apply
+from pytensor.graph.basic import ancestors, walk
+from pytensor.scalar.basic import Cast
+from pytensor.tensor.elemwise import Elemwise
+from pytensor.tensor.random.op import RandomVariable
+from pytensor.tensor.var import TensorConstant, TensorVariable
 
 import pymc as pm
 
@@ -199,6 +199,7 @@ class ModelGraph:
 
         Just groups by the shape of the underlying distribution.  Will be wrong
         if there are two plates with the same shape.
+
         Returns
         -------
         dict

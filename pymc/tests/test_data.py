@@ -15,19 +15,20 @@
 import io
 import itertools as it
 
-import aesara
-import aesara.tensor as at
 import cloudpickle
 import numpy as np
+import pytensor
+import pytensor.tensor as at
 import pytest
 import scipy.stats as st
 
-from aesara import shared
-from aesara.tensor.var import TensorVariable
+from pytensor import shared
+from pytensor.tensor.var import TensorVariable
 
 import pymc as pm
 
-from pymc.aesaraf import GeneratorOp, floatX
+from pymc.data import is_minibatch
+from pymc.pytensorf import GeneratorOp, floatX
 from pymc.tests.helpers import SeededTest, select_by_precision
 
 
@@ -448,7 +449,7 @@ class _DataSampler:
     """
 
     def __init__(self, data, batchsize=50, random_seed=42, dtype="floatX"):
-        self.dtype = aesara.config.floatX if dtype == "floatX" else dtype
+        self.dtype = pytensor.config.floatX if dtype == "floatX" else dtype
         self.rng = np.random.RandomState(random_seed)
         self.data = data
         self.n = batchsize
@@ -490,7 +491,7 @@ class TestGenerator:
         generator = pm.GeneratorAdapter(integers())
         gop = GeneratorOp(generator)()
         assert gop.tag.test_value == np.float32(0)
-        f = aesara.function([], gop)
+        f = pytensor.function([], gop)
         assert f() == np.float32(0)
         assert f() == np.float32(1)
         for _ in range(2, 100):
@@ -502,7 +503,7 @@ class TestGenerator:
             res = list(it.islice(integers_ndim(ndim), 0, 2))
             generator = pm.GeneratorAdapter(integers_ndim(ndim))
             gop = GeneratorOp(generator)()
-            f = aesara.function([], gop)
+            f = pytensor.function([], gop)
             assert ndim == res[0].ndim
             np.testing.assert_equal(f(), res[0])
             np.testing.assert_equal(f(), res[1])
@@ -510,9 +511,9 @@ class TestGenerator:
     def test_cloning_available(self):
         gop = pm.generator(integers())
         res = gop**2
-        shared = aesara.shared(pm.floatX(10))
-        res1 = aesara.clone_replace(res, {gop: shared})
-        f = aesara.function([], res1)
+        shared = pytensor.shared(pm.floatX(10))
+        res1 = pytensor.clone_replace(res, {gop: shared})
+        f = pytensor.function([], res1)
         assert f() == np.float32(100)
 
     def test_default_value(self):
@@ -521,7 +522,7 @@ class TestGenerator:
                 yield pm.floatX(np.ones((10, 10)) * i)
 
         gop = pm.generator(gen(), np.ones((10, 10)) * 10)
-        f = aesara.function([], gop)
+        f = pytensor.function([], gop)
         np.testing.assert_equal(np.ones((10, 10)) * 0, f())
         np.testing.assert_equal(np.ones((10, 10)) * 1, f())
         np.testing.assert_equal(np.ones((10, 10)) * 10, f())
@@ -534,7 +535,7 @@ class TestGenerator:
                 yield pm.floatX(np.ones((10, 10)) * i)
 
         gop = pm.generator(gen())
-        f = aesara.function([], gop)
+        f = pytensor.function([], gop)
         np.testing.assert_equal(np.ones((10, 10)) * 0, f())
         np.testing.assert_equal(np.ones((10, 10)) * 1, f())
         with pytest.raises(StopIteration):
@@ -552,12 +553,12 @@ class TestGenerator:
 
     def test_gen_cloning_with_shape_change(self, datagen):
         gen = pm.generator(datagen)
-        gen_r = pm.at_rng().normal(size=gen.shape).T
+        gen_r = at.random.normal(size=gen.shape).T
         X = gen.dot(gen_r)
-        res, _ = aesara.scan(lambda x: x.sum(), X, n_steps=X.shape[0])
+        res, _ = pytensor.scan(lambda x: x.sum(), X, n_steps=X.shape[0])
         assert res.eval().shape == (50,)
-        shared = aesara.shared(datagen.data.astype(gen.dtype))
-        res2 = aesara.clone_replace(res, {gen: shared**2})
+        shared = pytensor.shared(datagen.data.astype(gen.dtype))
+        res2 = pytensor.clone_replace(res, {gen: shared**2})
         assert res2.eval().shape == (1000,)
 
 
@@ -583,11 +584,11 @@ class TestScaling:
     def test_density_scaling(self):
         with pm.Model() as model1:
             pm.Normal("n", observed=[[1]], total_size=1)
-            p1 = aesara.function([], model1.logp())
+            p1 = pytensor.function([], model1.logp())
 
         with pm.Model() as model2:
             pm.Normal("n", observed=[[1]], total_size=2)
-            p2 = aesara.function([], model2.logp())
+            p2 = pytensor.function([], model2.logp())
         assert p1() * 2 == p2()
 
     def test_density_scaling_with_generator(self):
@@ -602,12 +603,12 @@ class TestScaling:
         # We have same size models
         with pm.Model() as model1:
             pm.Normal("n", observed=gen1(), total_size=100)
-            p1 = aesara.function([], model1.logp())
+            p1 = pytensor.function([], model1.logp())
 
         with pm.Model() as model2:
             gen_var = pm.generator(gen2())
             pm.Normal("n", observed=gen_var, total_size=100)
-            p2 = aesara.function([], model2.logp())
+            p2 = pytensor.function([], model2.logp())
 
         for i in range(10):
             _1, _2, _t = p1(), p2(), next(t)
@@ -624,7 +625,7 @@ class TestScaling:
             grad1 = model1.compile_fn(model1.dlogp(vars=m), point_fn=False)
         with pm.Model() as model2:
             m = pm.Normal("m")
-            shavar = aesara.shared(np.ones((1000, 100)))
+            shavar = pytensor.shared(np.ones((1000, 100)))
             pm.Normal("n", observed=shavar)
             grad2 = model2.compile_fn(model2.dlogp(vars=m), point_fn=False)
 
@@ -637,27 +638,27 @@ class TestScaling:
     def test_multidim_scaling(self):
         with pm.Model() as model0:
             pm.Normal("n", observed=[[1, 1], [1, 1]], total_size=[])
-            p0 = aesara.function([], model0.logp())
+            p0 = pytensor.function([], model0.logp())
 
         with pm.Model() as model1:
             pm.Normal("n", observed=[[1, 1], [1, 1]], total_size=[2, 2])
-            p1 = aesara.function([], model1.logp())
+            p1 = pytensor.function([], model1.logp())
 
         with pm.Model() as model2:
             pm.Normal("n", observed=[[1], [1]], total_size=[2, 2])
-            p2 = aesara.function([], model2.logp())
+            p2 = pytensor.function([], model2.logp())
 
         with pm.Model() as model3:
             pm.Normal("n", observed=[[1, 1]], total_size=[2, 2])
-            p3 = aesara.function([], model3.logp())
+            p3 = pytensor.function([], model3.logp())
 
         with pm.Model() as model4:
             pm.Normal("n", observed=[[1]], total_size=[2, 2])
-            p4 = aesara.function([], model4.logp())
+            p4 = pytensor.function([], model4.logp())
 
         with pm.Model() as model5:
             pm.Normal("n", observed=[[1]], total_size=[2, Ellipsis, 2])
-            p5 = aesara.function([], model5.logp())
+            p5 = pytensor.function([], model5.logp())
         _p0 = p0()
         assert (
             np.allclose(_p0, p1())
@@ -696,15 +697,10 @@ class TestScaling:
 
     def test_mixed1(self):
         with pm.Model():
-            data = np.random.rand(10, 20, 30, 40, 50)
-            mb = pm.Minibatch(data, [2, None, 20, Ellipsis, 10])
-            pm.Normal("n", observed=mb, total_size=(10, None, 30, Ellipsis, 50))
-
-    def test_mixed2(self):
-        with pm.Model():
-            data = np.random.rand(10, 20, 30, 40, 50)
-            mb = pm.Minibatch(data, [2, None, 20])
-            pm.Normal("n", observed=mb, total_size=(10, None, 30))
+            data = np.random.rand(10, 20)
+            mb = pm.Minibatch(data, batch_size=5)
+            v = pm.Normal("n", observed=mb, total_size=10)
+            assert pm.logp(v, 1) is not None, "Check index is allowed in graph"
 
     def test_free_rv(self):
         with pm.Model() as model4:
@@ -719,51 +715,28 @@ class TestScaling:
 
 @pytest.mark.usefixtures("strict_float32")
 class TestMinibatch:
-    data = np.random.rand(30, 10, 40, 10, 50)
+    data = np.random.rand(30, 10)
 
     def test_1d(self):
-        mb = pm.Minibatch(self.data, 20)
-        assert mb.eval().shape == (20, 10, 40, 10, 50)
+        mb = pm.Minibatch(self.data, batch_size=20)
+        assert is_minibatch(mb)
+        assert mb.eval().shape == (20, 10)
 
-    def test_2d(self):
-        mb = pm.Minibatch(self.data, [(10, 42), (4, 42)])
-        assert mb.eval().shape == (10, 4, 40, 10, 50)
+    def test_allowed(self):
+        mb = pm.Minibatch(at.as_tensor(self.data).astype(int), batch_size=20)
+        assert is_minibatch(mb)
 
-    @pytest.mark.parametrize(
-        "batch_size, expected",
-        [
-            ([(10, 42), None, (4, 42)], (10, 10, 4, 10, 50)),
-            ([(10, 42), Ellipsis, (4, 42)], (10, 10, 40, 10, 4)),
-            ([(10, 42), None, Ellipsis, (4, 42)], (10, 10, 40, 10, 4)),
-            ([10, None, Ellipsis, (4, 42)], (10, 10, 40, 10, 4)),
-        ],
-    )
-    def test_special_batch_size(self, batch_size, expected):
-        mb = pm.Minibatch(self.data, batch_size)
-        assert mb.eval().shape == expected
+    def test_not_allowed(self):
+        with pytest.raises(ValueError, match="not valid for Minibatch"):
+            mb = pm.Minibatch(at.as_tensor(self.data) * 2, batch_size=20)
 
-    def test_cloning_available(self):
-        gop = pm.Minibatch(np.arange(100), 1)
-        res = gop**2
-        shared = aesara.shared(np.array([10]))
-        res1 = aesara.clone_replace(res, {gop: shared})
-        f = aesara.function([], res1)
-        assert f() == np.array([100])
+    def test_not_allowed2(self):
+        with pytest.raises(ValueError, match="not valid for Minibatch"):
+            mb = pm.Minibatch(self.data, at.as_tensor(self.data) * 2, batch_size=20)
 
-    def test_align(self):
-        m = pm.Minibatch(np.arange(1000), 1, random_seed=1)
-        n = pm.Minibatch(np.arange(1000), 1, random_seed=1)
-        f = aesara.function([], [m, n])
-        n.eval()  # not aligned
-        a, b = zip(*(f() for _ in range(1000)))
-        assert a != b
-        pm.align_minibatches()
-        a, b = zip(*(f() for _ in range(1000)))
-        assert a == b
-        n.eval()  # not aligned
-        pm.align_minibatches([m])
-        a, b = zip(*(f() for _ in range(1000)))
-        assert a != b
-        pm.align_minibatches([m, n])
-        a, b = zip(*(f() for _ in range(1000)))
-        assert a == b
+    def test_assert(self):
+        with pytest.raises(
+            AssertionError, match=r"All variables shape\[0\] in Minibatch should be equal"
+        ):
+            d1, d2 = pm.Minibatch(self.data, self.data[::2], batch_size=20)
+            d1.eval()

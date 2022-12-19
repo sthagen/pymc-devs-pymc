@@ -40,13 +40,13 @@ from typing import Callable, Dict, Generator, Iterable, List, Optional, Set, Tup
 
 import numpy as np
 
-from aesara import tensor as at
-from aesara.graph import Apply, Op
-from aesara.graph.basic import Constant, clone_get_equiv, graph_inputs, walk
-from aesara.graph.fg import FunctionGraph
-from aesara.link.c.type import CType
-from aesara.raise_op import CheckAndRaise
-from aesara.tensor.var import TensorVariable
+from pytensor import tensor as at
+from pytensor.graph import Apply, Op
+from pytensor.graph.basic import Constant, clone_get_equiv, graph_inputs, walk
+from pytensor.graph.fg import FunctionGraph
+from pytensor.link.c.type import CType
+from pytensor.raise_op import CheckAndRaise
+from pytensor.tensor.var import TensorVariable
 
 from pymc.logprob.abstract import MeasurableVariable, _logprob
 
@@ -62,7 +62,7 @@ def walk_model(
     By default, these walks will not go past ``MeasurableVariable`` nodes.
 
     Parameters
-    ==========
+    ----------
     graphs
         The graphs to walk.
     walk_past_rvs
@@ -104,12 +104,12 @@ def replace_rvs_in_graphs(
     This will *not* recompute test values.
 
     Parameters
-    ==========
+    ----------
     graphs
         The graphs in which random variables are to be replaced.
 
     Returns
-    =======
+    -------
     A ``tuple`` containing the transformed graphs and a ``dict`` of the
     replacements that were made.
     """
@@ -154,7 +154,7 @@ def rvs_to_value_vars(
     This will *not* recompute test values in the resulting graphs.
 
     Parameters
-    ==========
+    ----------
     graphs
         The graphs in which to perform the replacements.
     initial_replacements

@@ -40,7 +40,7 @@ jobs:
           - |
             pymc/tests/test_util.py
             pymc/tests/distributions/test_logprob.py
-            pymc/tests/test_aesaraf.py
+            pymc/tests/test_pytensorf.py
             pymc/tests/test_math.py
             pymc/tests/backends/test_base.py
             pymc/tests/backends/test_ndarray.py
@@ -50,8 +50,6 @@ jobs:
             pymc/tests/distributions/test_mixture.py
 
           - |
-            pymc/tests/distributions/test_distribution.py
-            pymc/tests/distributions/test_discrete.py
             pymc/tests/distributions/test_continuous.py
             pymc/tests/distributions/test_multivariate.py
 
@@ -59,10 +57,12 @@ jobs:
             pymc/tests/distributions/test_bound.py
             pymc/tests/distributions/test_censored.py
             pymc/tests/distributions/test_simulator.py
-            pymc/tests/distributions/test_truncated.py
             pymc/tests/sampling/test_forward.py
             pymc/tests/sampling/test_population.py
             pymc/tests/stats/test_convergence.py
+            pymc/tests/stats/test_log_likelihood.py
+            pymc/tests/distributions/test_distribution.py
+            pymc/tests/distributions/test_discrete.py
 
           - |
             pymc/tests/tuning/test_scaling.py
@@ -86,6 +86,7 @@ jobs:
             pymc/tests/step_methods/hmc/test_quadpotential.py
 
           - |
+            pymc/tests/distributions/test_truncated.py
             pymc/tests/logprob/test_abstract.py
             pymc/tests/logprob/test_censoring.py
             pymc/tests/logprob/test_composite_logprob.py
@@ -102,7 +103,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       TEST_SUBSET: ${{ matrix.test-subset }}
-      AESARA_FLAGS: floatX=${{ matrix.floatx }},gcc__cxxflags='-march=native'
+      PYTENSOR_FLAGS: floatX=${{ matrix.floatx }},gcc__cxxflags='-march=native'
     defaults:
       run:
         shell: bash -l {0}
@@ -165,15 +166,15 @@ jobs:
         python-version: ["3.8"]
         test-subset:
           - pymc/tests/variational/test_approximations.py pymc/tests/variational/test_callbacks.py pymc/tests/variational/test_inference.py pymc/tests/variational/test_opvi.py pymc/tests/test_initial_point.py
-          - pymc/tests/test_model.py pymc/tests/step_methods/test_compound.py pymc/tests/step_methods/hmc/test_hmc.py
+          - pymc/tests/test_model.py pymc/tests/sampling/test_mcmc.py
           - pymc/tests/gp/test_cov.py pymc/tests/gp/test_gp.py pymc/tests/gp/test_mean.py pymc/tests/gp/test_util.py pymc/tests/ode/test_ode.py pymc/tests/ode/test_utils.py pymc/tests/smc/test_smc.py pymc/tests/sampling/test_parallel.py
-          - pymc/tests/sampling/test_mcmc.py pymc/tests/step_methods/test_metropolis.py pymc/tests/step_methods/test_slicer.py pymc/tests/step_methods/hmc/test_nuts.py
+          - pymc/tests/step_methods/test_metropolis.py pymc/tests/step_methods/test_slicer.py pymc/tests/step_methods/hmc/test_nuts.py pymc/tests/step_methods/test_compound.py pymc/tests/step_methods/hmc/test_hmc.py
 
       fail-fast: false
     runs-on: ${{ matrix.os }}
     env:
       TEST_SUBSET: ${{ matrix.test-subset }}
-      AESARA_FLAGS: floatX=${{ matrix.floatx }},gcc__cxxflags='-march=core2'
+      PYTENSOR_FLAGS: floatX=${{ matrix.floatx }},gcc__cxxflags='-march=core2'
     defaults:
       run:
         shell: cmd
@@ -252,7 +253,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       TEST_SUBSET: ${{ matrix.test-subset }}
-      AESARA_FLAGS: floatX=${{ matrix.floatx }},gcc__cxxflags='-march=native'
+      PYTENSOR_FLAGS: floatX=${{ matrix.floatx }},gcc__cxxflags='-march=native'
     defaults:
       run:
         shell: bash -l {0}
@@ -317,7 +318,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       TEST_SUBSET: ${{ matrix.test-subset }}
-      AESARA_FLAGS: floatX=${{ matrix.floatx }},gcc__cxxflags='-march=native'
+      PYTENSOR_FLAGS: floatX=${{ matrix.floatx }},gcc__cxxflags='-march=native'
     defaults:
       run:
         shell: bash -l {0}
@@ -387,7 +388,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       TEST_SUBSET: ${{ matrix.test-subset }}
-      AESARA_FLAGS: floatX=${{ matrix.floatx }},gcc__cxxflags='-march=core2'
+      PYTENSOR_FLAGS: floatX=${{ matrix.floatx }},gcc__cxxflags='-march=core2'
     defaults:
       run:
         shell: cmd

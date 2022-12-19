@@ -37,25 +37,40 @@
 import abc
 
 from copy import copy
-from functools import partial, singledispatch
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 
-import aesara.tensor as at
+import numpy as np
+import pytensor.tensor as at
 
-from aesara.gradient import DisconnectedType, jacobian
-from aesara.graph.basic import Apply, Node, Variable
-from aesara.graph.features import AlreadyThere, Feature
-from aesara.graph.fg import FunctionGraph
-from aesara.graph.op import Op
-from aesara.graph.rewriting.basic import GraphRewriter, in2out, node_rewriter
-from aesara.scalar import Add, Exp, Log, Mul
-from aesara.tensor.elemwise import Elemwise
-from aesara.tensor.rewriting.basic import (
+from pytensor.gradient import DisconnectedType, jacobian
+from pytensor.graph.basic import Apply, Node, Variable
+from pytensor.graph.features import AlreadyThere, Feature
+from pytensor.graph.fg import FunctionGraph
+from pytensor.graph.op import Op
+from pytensor.graph.replace import clone_replace
+from pytensor.graph.rewriting.basic import GraphRewriter, in2out, node_rewriter
+from pytensor.scalar import Add, Exp, Log, Mul, Pow, Sqr, Sqrt
+from pytensor.scan.op import Scan
+from pytensor.tensor.exceptions import NotScalarConstantError
+from pytensor.tensor.math import (
+    add,
+    exp,
+    log,
+    mul,
+    neg,
+    pow,
+    reciprocal,
+    sqr,
+    sqrt,
+    sub,
+    true_div,
+)
+from pytensor.tensor.rewriting.basic import (
     register_specialize,
     register_stabilize,
     register_useless,
 )
-from aesara.tensor.var import TensorVariable
+from pytensor.tensor.var import TensorVariable
 
 from pymc.logprob.abstract import (
     MeasurableElemwise,
@@ -67,21 +82,6 @@ from pymc.logprob.abstract import (
 )
 from pymc.logprob.rewriting import PreserveRVMappings, measurable_ir_rewrites_db
 from pymc.logprob.utils import walk_model
-
-
-@singledispatch
-def _default_transformed_rv(
-    op: Op,
-    node: Node,
-) -> Optional[Apply]:
-    """Create a node for a transformed log-probability of a `MeasurableVariable`.
-
-    This function dispatches on the type of `op`.  If you want to implement
-    new transforms for a `MeasurableVariable`, register a function on this
-    dispatcher.
-
-    """
-    return None
 
 
 class TransformedVariable(Op):
@@ -123,8 +123,11 @@ class RVTransform(abc.ABC):
         """Apply the transformation."""
 
     @abc.abstractmethod
-    def backward(self, value: TensorVariable, *inputs: Variable) -> TensorVariable:
-        """Invert the transformation."""
+    def backward(
+        self, value: TensorVariable, *inputs: Variable
+    ) -> Union[TensorVariable, Tuple[TensorVariable, ...]]:
+        """Invert the transformation. Multiple values may be returned when the
+        transformation is not 1-to-1"""
 
     def log_jac_det(self, value: TensorVariable, *inputs) -> TensorVariable:
         """Construct the log of the absolute value of the Jacobian determinant."""
@@ -134,13 +137,6 @@ class RVTransform(abc.ABC):
         # return at.log(at.abs(jac))
         phi_inv = self.backward(value, *inputs)
         return at.log(at.abs(at.nlinalg.det(at.atleast_2d(jacobian(phi_inv, [value])[0]))))
-
-
-class DefaultTransformSentinel:
-    pass
-
-
-DEFAULT_TRANSFORM = DefaultTransformSentinel()
 
 
 @node_rewriter(tracks=None)
@@ -156,48 +152,138 @@ def transform_values(fgraph: FunctionGraph, node: Node) -> Optional[List[Node]]:
     ``Y`` on the natural scale.
     """
 
-    rv_map_feature = getattr(fgraph, "preserve_rv_mappings", None)
-    values_to_transforms = getattr(fgraph, "values_to_transforms", None)
+    rv_map_feature: Optional[PreserveRVMappings] = getattr(fgraph, "preserve_rv_mappings", None)
+    values_to_transforms: Optional[TransformValuesMapping] = getattr(
+        fgraph, "values_to_transforms", None
+    )
 
     if rv_map_feature is None or values_to_transforms is None:
         return None  # pragma: no cover
 
-    try:
-        rv_var = node.default_output()
-        rv_var_out_idx = node.outputs.index(rv_var)
-    except ValueError:
+    rv_vars = []
+    value_vars = []
+
+    for out in node.outputs:
+        value = rv_map_feature.rv_values.get(out, None)
+        if value is None:
+            continue
+        rv_vars.append(out)
+        value_vars.append(value)
+
+    if not value_vars:
         return None
 
-    value_var = rv_map_feature.rv_values.get(rv_var, None)
-    if value_var is None:
+    transforms = [values_to_transforms.get(value_var, None) for value_var in value_vars]
+
+    if all(transform is None for transform in transforms):
         return None
 
-    transform = values_to_transforms.get(value_var, None)
-
-    if transform is None:
-        return None
-    elif transform is DEFAULT_TRANSFORM:
-        trans_node = _default_transformed_rv(node.op, node)
-        if trans_node is None:
-            return None
-        transform = trans_node.op.transform
-    else:
-        new_op = _create_transformed_rv_op(node.op, transform)
-        # Create a new `Apply` node and outputs
-        trans_node = node.clone()
-        trans_node.op = new_op
-        trans_node.outputs[rv_var_out_idx].name = node.outputs[rv_var_out_idx].name
+    new_op = _create_transformed_rv_op(node.op, transforms)
+    # Create a new `Apply` node and outputs
+    trans_node = node.clone()
+    trans_node.op = new_op
 
     # We now assume that the old value variable represents the *transformed space*.
     # This means that we need to replace all instance of the old value variable
     # with "inversely/un-" transformed versions of itself.
-    new_value_var = transformed_variable(
-        transform.backward(value_var, *trans_node.inputs), value_var
-    )
-    if value_var.name and getattr(transform, "name", None):
-        new_value_var.name = f"{value_var.name}_{transform.name}"
+    for rv_var, value_var, transform in zip(rv_vars, value_vars, transforms):
+        rv_var_out_idx = node.outputs.index(rv_var)
+        trans_node.outputs[rv_var_out_idx].name = rv_var.name
 
-    rv_map_feature.update_rv_maps(rv_var, new_value_var, trans_node.outputs[rv_var_out_idx])
+        if transform is None:
+            continue
+
+        new_value_var = transformed_variable(
+            transform.backward(value_var, *trans_node.inputs), value_var
+        )
+
+        if value_var.name and getattr(transform, "name", None):
+            new_value_var.name = f"{value_var.name}_{transform.name}"
+
+        rv_map_feature.update_rv_maps(rv_var, new_value_var, trans_node.outputs[rv_var_out_idx])
+
+    return trans_node.outputs
+
+
+@node_rewriter(tracks=[Scan])
+def transform_scan_values(fgraph: FunctionGraph, node: Node) -> Optional[List[Node]]:
+    """Apply transforms to Scan value variables.
+
+    This specialized rewrite is needed because Scan replaces the original value variables
+    by a more complex graph. We want to apply the transform to the original value variable
+    in this subgraph, leaving the rest intact
+    """
+
+    rv_map_feature: Optional[PreserveRVMappings] = getattr(fgraph, "preserve_rv_mappings", None)
+    values_to_transforms: Optional[TransformValuesMapping] = getattr(
+        fgraph, "values_to_transforms", None
+    )
+
+    if rv_map_feature is None or values_to_transforms is None:
+        return None  # pragma: no cover
+
+    rv_vars = []
+    value_vars = []
+
+    for out in node.outputs:
+        value = rv_map_feature.rv_values.get(out, None)
+        if value is None:
+            continue
+        rv_vars.append(out)
+        value_vars.append(value)
+
+    if not value_vars:
+        return None
+
+    transforms = [
+        values_to_transforms.get(rv_map_feature.original_values[value], None)
+        for value_var in value_vars
+    ]
+
+    if all(transform is None for transform in transforms):
+        return None
+
+    new_op = _create_transformed_rv_op(node.op, transforms)
+    trans_node = node.clone()
+    trans_node.op = new_op
+
+    # We now assume that the old value variable represents the *transformed space*.
+    # This means that we need to replace all instance of the old value variable
+    # with "inversely/un-" transformed versions of itself.
+    for rv_var, value_var, transform in zip(rv_vars, value_vars, transforms):
+        rv_var_out_idx = node.outputs.index(rv_var)
+        trans_node.outputs[rv_var_out_idx].name = rv_var.name
+
+        if transform is None:
+            continue
+
+        # We access the original value variable and apply the transform to that
+        original_value_var = rv_map_feature.original_values[value_var]
+        trans_original_value_var = transform.backward(original_value_var, *trans_node.inputs)
+
+        # We then replace the reference to the original value variable in the scan value
+        # variable by the back-transform projection computed above
+
+        # The first input corresponds to the original value variable. We are careful to
+        # only clone_replace that part of the graph, as we don't want to break the
+        # mappings between other rvs that are likely to be present in the rest of the
+        # scan value variable graph
+        # TODO: Is it true that the original value only appears in the first input
+        #  and that no other RV can appear there?
+        (trans_original_value_var,) = clone_replace(
+            (value_var.owner.inputs[0],),
+            replace={original_value_var: trans_original_value_var},
+        )
+        trans_value_var = value_var.owner.clone_with_new_inputs(
+            inputs=[trans_original_value_var] + value_var.owner.inputs[1:]
+        ).default_output()
+
+        new_value_var = transformed_variable(trans_value_var, original_value_var)
+
+        if value_var.name and getattr(transform, "name", None):
+            new_value_var.name = f"{value_var.name}_{transform.name}"
+
+        rv_map_feature.update_rv_maps(rv_var, new_value_var, trans_node.outputs[rv_var_out_idx])
 
     return trans_node.outputs
 
@@ -206,7 +292,7 @@ class TransformValuesMapping(Feature):
     r"""A `Feature` that maintains a map between value variables and their transforms."""
 
     def __init__(self, values_to_transforms):
-        self.values_to_transforms = values_to_transforms
+        self.values_to_transforms = values_to_transforms.copy()
 
     def on_attach(self, fgraph):
         if hasattr(fgraph, "values_to_transforms"):
@@ -216,24 +302,23 @@ class TransformValuesMapping(Feature):
 
 
 class TransformValuesRewrite(GraphRewriter):
-    r"""Transforms value variables according to a map and/or per-`RandomVariable` defaults."""
+    r"""Transforms value variables according to a map."""
 
-    default_transform_rewrite = in2out(transform_values, ignore_newtrees=True)
+    transform_rewrite = in2out(transform_values, ignore_newtrees=True)
+    scan_transform_rewrite = in2out(transform_scan_values, ignore_newtrees=True)
 
     def __init__(
         self,
-        values_to_transforms: Dict[
-            TensorVariable, Union[RVTransform, DefaultTransformSentinel, None]
-        ],
+        values_to_transforms: Dict[TensorVariable, Union[RVTransform, None]],
     ):
         """
         Parameters
-        ==========
+        ----------
         values_to_transforms
             Mapping between value variables and their transformations.  Each
-            value variable can be assigned one of `RVTransform`,
-            ``DEFAULT_TRANSFORM``, or ``None``. If a transform is not specified
-            for a specific value variable it will not be transformed.
+            value variable can be assigned one of `RVTransform`, or ``None``.
+            If a transform is not specified for a specific value variable it will
+            not be transformed.
 
         """
 
@@ -244,13 +329,14 @@ class TransformValuesRewrite(GraphRewriter):
         fgraph.attach_feature(values_transforms_feature)
 
     def apply(self, fgraph: FunctionGraph):
-        return self.default_transform_rewrite.rewrite(fgraph)
+        self.transform_rewrite.rewrite(fgraph)
+        self.scan_transform_rewrite.rewrite(fgraph)
 
 
 class MeasurableTransform(MeasurableElemwise):
     """A placeholder used to specify a log-likelihood for a transformed measurable variable"""
 
-    valid_scalar_types = (Exp, Log, Add, Mul)
+    valid_scalar_types = (Exp, Log, Add, Mul, Pow)
 
     # Cannot use `transform` as name because it would clash with the property added by
     # the `TransformValuesRewrite`
@@ -279,19 +365,137 @@ def measurable_transform_logprob(op: MeasurableTransform, values, *inputs, **kwa
     # The value variable must still be back-transformed to be on the natural support of
     # the respective measurable input.
     backward_value = op.transform_elemwise.backward(value, *other_inputs)
-    input_logprob = logprob(measurable_input, backward_value, **kwargs)
+
+    # Some transformations, like squaring may produce multiple backward values
+    if isinstance(backward_value, tuple):
+        input_logprob = at.logaddexp(
+            *(logprob(measurable_input, backward_val, **kwargs) for backward_val in backward_value)
+        )
+    else:
+        input_logprob = logprob(measurable_input, backward_value)
 
     jacobian = op.transform_elemwise.log_jac_det(value, *other_inputs)
 
     return input_logprob + jacobian
 
 
-@node_rewriter([Elemwise])
+@node_rewriter([reciprocal])
+def measurable_reciprocal_to_power(fgraph, node):
+    """Convert reciprocal of `MeasurableVariable`s to power."""
+    inp = node.inputs[0]
+    if not (inp.owner and isinstance(inp.owner.op, MeasurableVariable)):
+        return None
+
+    rv_map_feature: Optional[PreserveRVMappings] = getattr(fgraph, "preserve_rv_mappings", None)
+    if rv_map_feature is None:
+        return None  # pragma: no cover
+
+    # Only apply this rewrite if the variable is unvalued
+    if inp in rv_map_feature.rv_values:
+        return None  # pragma: no cover
+
+    return [at.pow(inp, -1.0)]
+
+
+@node_rewriter([sqr, sqrt])
+def measurable_sqrt_sqr_to_power(fgraph, node):
+    """Convert square root or square of `MeasurableVariable`s to power form."""
+
+    inp = node.inputs[0]
+    if not (inp.owner and isinstance(inp.owner.op, MeasurableVariable)):
+        return None
+
+    rv_map_feature: Optional[PreserveRVMappings] = getattr(fgraph, "preserve_rv_mappings", None)
+    if rv_map_feature is None:
+        return None  # pragma: no cover
+
+    # Only apply this rewrite if the variable is unvalued
+    if inp in rv_map_feature.rv_values:
+        return None  # pragma: no cover
+
+    if isinstance(node.op.scalar_op, Sqr):
+        return [at.pow(inp, 2)]
+
+    if isinstance(node.op.scalar_op, Sqrt):
+        return [at.pow(inp, 1 / 2)]
+
+
+@node_rewriter([true_div])
+def measurable_div_to_product(fgraph, node):
+    """Convert divisions involving `MeasurableVariable`s to products."""
+
+    measurable_vars = [
+        var for var in node.inputs if (var.owner and isinstance(var.owner.op, MeasurableVariable))
+    ]
+    if not measurable_vars:
+        return None  # pragma: no cover
+
+    rv_map_feature: Optional[PreserveRVMappings] = getattr(fgraph, "preserve_rv_mappings", None)
+    if rv_map_feature is None:
+        return None  # pragma: no cover
+
+    # Only apply this rewrite if there is one unvalued MeasurableVariable involved
+    if all(measurable_var in rv_map_feature.rv_values for measurable_var in measurable_vars):
+        return None  # pragma: no cover
+
+    numerator, denominator = node.inputs
+
+    # Check if numerator is 1
+    try:
+        if at.get_scalar_constant_value(numerator) == 1:
+            # We convert the denominator directly to a power transform as this
+            # must be the measurable input
+            return [at.pow(denominator, -1)]
+    except NotScalarConstantError:
+        pass
+    # We don't convert the denominator directly to a power transform as
+    # it might not be measurable (and therefore not needed)
+    return [at.mul(numerator, at.reciprocal(denominator))]
+
+
+@node_rewriter([neg])
+def measurable_neg_to_product(fgraph, node):
+    """Convert negation of `MeasurableVariable`s to product with `-1`."""
+
+    inp = node.inputs[0]
+    if not (inp.owner and isinstance(inp.owner.op, MeasurableVariable)):
+        return None
+
+    rv_map_feature: Optional[PreserveRVMappings] = getattr(fgraph, "preserve_rv_mappings", None)
+    if rv_map_feature is None:
+        return None  # pragma: no cover
+
+    # Only apply this rewrite if the variable is unvalued
+    if inp in rv_map_feature.rv_values:
+        return None  # pragma: no cover
+
+    return [at.mul(inp, -1.0)]
+
+
+@node_rewriter([sub])
+def measurable_sub_to_neg(fgraph, node):
+    """Convert subtraction involving `MeasurableVariable`s to addition with neg"""
+    measurable_vars = [
+        var for var in node.inputs if (var.owner and isinstance(var.owner.op, MeasurableVariable))
+    ]
+    if not measurable_vars:
+        return None  # pragma: no cover
+
+    rv_map_feature: Optional[PreserveRVMappings] = getattr(fgraph, "preserve_rv_mappings", None)
+    if rv_map_feature is None:
+        return None  # pragma: no cover
+
+    # Only apply this rewrite if there is one unvalued MeasurableVariable involved
+    if all(measurable_var in rv_map_feature.rv_values for measurable_var in measurable_vars):
+        return None  # pragma: no cover
+
+    minuend, subtrahend = node.inputs
+    return [at.add(minuend, at.neg(subtrahend))]
+
+
+@node_rewriter([exp, log, add, mul, pow])
 def find_measurable_transforms(fgraph: FunctionGraph, node: Node) -> Optional[List[Node]]:
     """Find measurable transformations from Elemwise operators."""
-    scalar_op = node.op.scalar_op
-    if not isinstance(scalar_op, MeasurableTransform.valid_scalar_types):
-        return None
 
     # Node was already converted
     if isinstance(node.op, MeasurableVariable):
@@ -341,6 +545,7 @@ def find_measurable_transforms(fgraph: FunctionGraph, node: Node) -> Optional[Li
     # This seems to be the only thing preventing nested rewrites from being erased
     measurable_input = assign_custom_measurable_outputs(measurable_input.owner)
 
+    scalar_op = node.op.scalar_op
     measurable_input_idx = 0
     transform_inputs: Tuple[TensorVariable, ...] = (measurable_input,)
     transform: RVTransform
@@ -348,6 +553,18 @@ def find_measurable_transforms(fgraph: FunctionGraph, node: Node) -> Optional[Li
         transform = ExpTransform()
     elif isinstance(scalar_op, Log):
         transform = LogTransform()
+    elif isinstance(scalar_op, Pow):
+        # We only allow for the base to be measurable
+        if measurable_input_idx != 0:
+            return None
+        try:
+            (power,) = other_inputs
+            power = at.get_scalar_constant_value(power).item()
+        # Power needs to be a constant
+        except NotScalarConstantError:
+            return None
+        transform_inputs = (measurable_input, power)
+        transform = PowerTransform(power=power)
     elif isinstance(scalar_op, Add):
         transform_inputs = (measurable_input, at.add(*other_inputs))
         transform = LocTransform(
@@ -371,9 +588,46 @@ def find_measurable_transforms(fgraph: FunctionGraph, node: Node) -> Optional[Li
 
 
 measurable_ir_rewrites_db.register(
+    "measurable_reciprocal_to_power",
+    measurable_reciprocal_to_power,
+    "basic",
+    "transform",
+)
+
+
+measurable_ir_rewrites_db.register(
+    "measurable_sqrt_sqr_to_power",
+    measurable_sqrt_sqr_to_power,
+    "basic",
+    "transform",
+)
+
+
+measurable_ir_rewrites_db.register(
+    "measurable_div_to_product",
+    measurable_div_to_product,
+    "basic",
+    "transform",
+)
+
+
+measurable_ir_rewrites_db.register(
+    "measurable_neg_to_product",
+    measurable_neg_to_product,
+    "basic",
+    "transform",
+)
+
+measurable_ir_rewrites_db.register(
+    "measurable_sub_to_neg",
+    measurable_sub_to_neg,
+    "basic",
+    "transform",
+)
+
+measurable_ir_rewrites_db.register(
     "find_measurable_transforms",
     find_measurable_transforms,
-    0,
     "basic",
     "transform",
 )
@@ -442,6 +696,35 @@ class ExpTransform(RVTransform):
         return -at.log(value)
 
 
+class PowerTransform(RVTransform):
+    name = "power"
+
+    def __init__(self, power=None):
+        if not isinstance(power, (int, float)):
+            raise TypeError(f"Power must be integer or float, got {type(power)}")
+        if power == 0:
+            raise ValueError("Power cannot be 0")
+        self.power = power
+        super().__init__()
+
+    def forward(self, value, *inputs):
+        at.power(value, self.power)
+
+    def backward(self, value, *inputs):
+        backward_value = at.power(value, (1 / self.power))
+
+        # In this case the transform is not 1-to-1
+        if (self.power > 1) and (self.power % 2 == 0):
+            return -backward_value, backward_value
+        else:
+            return backward_value
+
+    def log_jac_det(self, value, *inputs):
+        inv_power = 1 / self.power
+        # Note: This fails for value==0
+        return np.log(np.abs(inv_power)) + (inv_power - 1) * at.log(value)
+
+
 class IntervalTransform(RVTransform):
     name = "interval"
 
@@ -449,7 +732,7 @@ class IntervalTransform(RVTransform):
         """
 
         Parameters
-        ==========
+        ----------
         args_fn
             Function that expects inputs of RandomVariable and returns the lower
             and upper bounds for the interval transformation. If one of these is
@@ -582,9 +865,8 @@ class ChainedTransform(RVTransform):
 
 def _create_transformed_rv_op(
     rv_op: Op,
-    transform: RVTransform,
+    transforms: Union[RVTransform, Sequence[Union[None, RVTransform]]],
     *,
-    default: bool = False,
     cls_dict_extra: Optional[Dict] = None,
 ) -> Op:
     """Create a new transformed variable instance given a base `RandomVariable` `Op`.
@@ -596,26 +878,30 @@ def _create_transformed_rv_op(
     also behaving exactly as it did before.
 
     Parameters
-    ==========
+    ----------
     rv_op
         The `RandomVariable` for which we want to construct a `TransformedRV`.
     transform
         The `RVTransform` for `rv_op`.
-    default
-        If ``False`` do not make `transform` the default transform for `rv_op`.
     cls_dict_extra
         Additional class members to add to the constructed `TransformedRV`.
 
     """
 
-    trans_name = getattr(transform, "name", "transformed")
+    if not isinstance(transforms, Sequence):
+        transforms = (transforms,)
+
+    trans_names = [
+        getattr(transform, "name", "transformed") if transform is not None else "None"
+        for transform in transforms
+    ]
     rv_op_type = type(rv_op)
     rv_type_name = rv_op_type.__name__
     cls_dict = rv_op_type.__dict__.copy()
     rv_name = cls_dict.get("name", "")
     if rv_name:
-        cls_dict["name"] = f"{rv_name}_{trans_name}"
-    cls_dict["transform"] = transform
+        cls_dict["name"] = f"{rv_name}_{'_'.join(trans_names)}"
+    cls_dict["transforms"] = transforms
 
     if cls_dict_extra is not None:
         cls_dict.update(cls_dict_extra)
@@ -631,97 +917,29 @@ def _create_transformed_rv_op(
         We assume that the value variable was back-transformed to be on the natural
         support of the respective random variable.
         """
-        (value,) = values
+        logprobs = _logprob(rv_op, values, *inputs, **kwargs)
 
-        logprob = _logprob(rv_op, values, *inputs, **kwargs)
+        if not isinstance(logprobs, Sequence):
+            logprobs = [logprobs]
 
         if use_jacobian:
-            assert isinstance(value.owner.op, TransformedVariable)
-            original_forward_value = value.owner.inputs[1]
-            jacobian = op.transform.log_jac_det(original_forward_value, *inputs)
-            logprob += jacobian
+            assert len(values) == len(logprobs) == len(op.transforms)
+            logprobs_jac = []
+            for value, transform, logprob in zip(values, op.transforms, logprobs):
+                if transform is None:
+                    logprobs_jac.append(logprob)
+                    continue
+                assert isinstance(value.owner.op, TransformedVariable)
+                original_forward_value = value.owner.inputs[1]
+                jacobian = transform.log_jac_det(original_forward_value, *inputs).copy()
+                if value.name:
+                    jacobian.name = f"{value.name}_jacobian"
+                logprobs_jac.append(logprob + jacobian)
+            logprobs = logprobs_jac
 
-        return logprob
-
-    transform_op = rv_op_type if default else new_op_type
-
-    @_default_transformed_rv.register(transform_op)
-    def class_transformed_rv(op, node):
-        new_op = new_op_type()
-        res = new_op.make_node(*node.inputs)
-        res.outputs[1].name = node.outputs[1].name
-        return res
+        return logprobs
 
     new_op = copy(rv_op)
     new_op.__class__ = new_op_type
 
     return new_op
-
-
-create_default_transformed_rv_op = partial(_create_transformed_rv_op, default=True)
-
-
-TransformedUniformRV = create_default_transformed_rv_op(
-    at.random.uniform,
-    # inputs[3] = lower; inputs[4] = upper
-    IntervalTransform(lambda *inputs: (inputs[3], inputs[4])),
-)
-TransformedParetoRV = create_default_transformed_rv_op(
-    at.random.pareto,
-    # inputs[3] = alpha
-    IntervalTransform(lambda *inputs: (inputs[3], None)),
-)
-TransformedTriangularRV = create_default_transformed_rv_op(
-    at.random.triangular,
-    # inputs[3] = lower; inputs[5] = upper
-    IntervalTransform(lambda *inputs: (inputs[3], inputs[5])),
-)
-TransformedHalfNormalRV = create_default_transformed_rv_op(
-    at.random.halfnormal,
-    # inputs[3] = loc
-    IntervalTransform(lambda *inputs: (inputs[3], None)),
-)
-TransformedWaldRV = create_default_transformed_rv_op(
-    at.random.wald,
-    LogTransform(),
-)
-TransformedExponentialRV = create_default_transformed_rv_op(
-    at.random.exponential,
-    LogTransform(),
-)
-TransformedLognormalRV = create_default_transformed_rv_op(
-    at.random.lognormal,
-    LogTransform(),
-)
-TransformedHalfCauchyRV = create_default_transformed_rv_op(
-    at.random.halfcauchy,
-    LogTransform(),
-)
-TransformedGammaRV = create_default_transformed_rv_op(
-    at.random.gamma,
-    LogTransform(),
-)
-TransformedInvGammaRV = create_default_transformed_rv_op(
-    at.random.invgamma,
-    LogTransform(),
-)
-TransformedChiSquareRV = create_default_transformed_rv_op(
-    at.random.chisquare,
-    LogTransform(),
-)
-TransformedWeibullRV = create_default_transformed_rv_op(
-    at.random.weibull,
-    LogTransform(),
-)
-TransformedBetaRV = create_default_transformed_rv_op(
-    at.random.beta,
-    LogOddsTransform(),
-)
-TransformedVonMisesRV = create_default_transformed_rv_op(
-    at.random.vonmises,
-    CircularTransform(),
-)
-TransformedDirichletRV = create_default_transformed_rv_op(
-    at.random.dirichlet,
-    SimplexTransform(),
-)

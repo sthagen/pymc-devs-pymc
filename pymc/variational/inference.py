@@ -124,7 +124,7 @@ class Inference:
         total_grad_norm_constraint: `float`
             Bounds gradient norm, prevents exploding gradient problem
         fn_kwargs: `dict`
-            Add kwargs to aesara.function (e.g. `{'profile': True}`)
+            Add kwargs to pytensor.function (e.g. `{'profile': True}`)
         more_replacements: `dict`
             Apply custom replacements before calculating gradients
 
@@ -417,7 +417,7 @@ class ADVI(KLqp):
 
         The tensors to which mini-bathced samples are supplied are
         handled separately by using callbacks in :func:`Inference.fit` method
-        that change storage of shared Aesara variable or by :func:`pymc.generator`
+        that change storage of shared PyTensor variable or by :func:`pymc.generator`
         that automatically iterates over minibatches and defined beforehand.
 
     -   (optional) Parameters of deterministic mappings
@@ -433,8 +433,6 @@ class ADVI(KLqp):
     model: :class:`pymc.Model`
         PyMC model for inference
     random_seed: None or int
-        leave None to use package global RandomStream or other
-        valid value to create instance specific one
     start: `dict[str, np.ndarray]` or `StartDict`
         starting point for inference
     start_sigma: `dict[str, np.ndarray]`
@@ -466,8 +464,6 @@ class FullRankADVI(KLqp):
     model: :class:`pymc.Model`
         PyMC model for inference
     random_seed: None or int
-        leave None to use package global RandomStream or other
-        valid value to create instance specific one
     start: `dict[str, np.ndarray]` or `StartDict`
         starting point for inference
 
@@ -539,8 +535,6 @@ class SVGD(ImplicitGradient):
     start: `dict[str, np.ndarray]` or `StartDict`
         initial point for inference
     random_seed: None or int
-        leave None to use package global RandomStream or other
-        valid value to create instance specific one
     kwargs: other keyword arguments passed to estimator
 
     References
@@ -631,7 +625,9 @@ class ASVGD(ImplicitGradient):
             "is often **underestimated** when using temperature = 1."
         )
         if approx is None:
-            approx = FullRank(model=kwargs.pop("model", None))
+            approx = FullRank(
+                model=kwargs.pop("model", None), random_seed=kwargs.pop("random_seed", None)
+            )
         super().__init__(estimator=estimator, approx=approx, kernel=kernel, **kwargs)
 
     def fit(
@@ -683,8 +679,6 @@ def fit(
     model: :class:`Model`
         PyMC model for inference
     random_seed: None or int
-        leave None to use package global RandomStream or other
-        valid value to create instance specific one
     inf_kwargs: dict
         additional kwargs passed to :class:`Inference`
     start: `dict[str, np.ndarray]` or `StartDict`
@@ -717,7 +711,7 @@ def fit(
     total_grad_norm_constraint: `float`
         Bounds gradient norm, prevents exploding gradient problem
     fn_kwargs: `dict`
-        Add kwargs to aesara.function (e.g. `{'profile': True}`)
+        Add kwargs to pytensor.function (e.g. `{'profile': True}`)
     more_replacements: `dict`
         Apply custom replacements before calculating gradients
 
