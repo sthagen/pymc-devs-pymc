@@ -1,4 +1,4 @@
-#   Copyright 2021 The PyMC Developers
+#   Copyright 2023 The PyMC Developers
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -107,7 +107,6 @@ class MultinomialB(Discrete):
 
 
 def test_multinomial_check_parameters():
-
     x = np.array([1, 5])
     n = x.sum()
 

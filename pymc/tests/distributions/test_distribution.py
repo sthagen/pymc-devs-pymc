@@ -1,4 +1,4 @@
-#   Copyright 2020 The PyMC Developers
+#   Copyright 2023 The PyMC Developers
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@ from pytensor.tensor import TensorVariable
 import pymc as pm
 
 from pymc.distributions import (
+    Censored,
     DiracDelta,
     Flat,
     HalfNormal,
@@ -33,7 +34,6 @@ from pymc.distributions import (
     MvNormal,
     MvStudentT,
     Normal,
-    logp,
 )
 from pymc.distributions.distribution import (
     CustomDist,
@@ -47,6 +47,7 @@ from pymc.distributions.shape_utils import change_dist_size, rv_size_is_none, to
 from pymc.distributions.transforms import log
 from pymc.exceptions import BlockModelAccessError
 from pymc.logprob.abstract import get_measurable_outputs, logcdf
+from pymc.logprob.joint_logprob import logp
 from pymc.model import Model
 from pymc.sampling import draw, sample
 from pymc.tests.distributions.util import assert_moment_is_expected
@@ -580,3 +581,9 @@ def test_tag_future_warning_dist():
         with pytest.warns(FutureWarning, match="Use model.rvs_to_values"):
             value_var = new_x.tag.value_var
         assert value_var == "1"
+
+
+def test_distribution_op_registered():
+    """Test that returned Ops are registered as virtual subclasses of the respective PyMC distributions."""
+    assert isinstance(Normal.dist().owner.op, Normal)
+    assert isinstance(Censored.dist(Normal.dist(), lower=None, upper=None).owner.op, Censored)

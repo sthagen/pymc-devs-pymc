@@ -1,4 +1,4 @@
-#   Copyright 2020 The PyMC Developers
+#   Copyright 2023 The PyMC Developers
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -235,7 +235,6 @@ class Metropolis(ArrayStepShared):
         return
 
     def astep(self, q0: RaveledVars) -> Tuple[RaveledVars, StatsType]:
-
         point_map_info = q0.point_map_info
         q0d = q0.data
 
@@ -373,7 +372,6 @@ class BinaryMetropolis(ArrayStep):
     ]
 
     def __init__(self, vars, scaling=1.0, tune=True, tune_interval=100, model=None):
-
         model = pm.modelcontext(model)
 
         self.scaling = scaling
@@ -464,7 +462,6 @@ class BinaryGibbsMetropolis(ArrayStep):
     name = "binary_gibbs_metropolis"
 
     def __init__(self, vars, order="random", transit_p=0.8, model=None):
-
         model = pm.modelcontext(model)
 
         # transition probabilities
@@ -550,7 +547,6 @@ class CategoricalGibbsMetropolis(ArrayStep):
     name = "categorical_gibbs_metropolis"
 
     def __init__(self, vars, proposal="uniform", order="random", model=None):
-
         model = pm.modelcontext(model)
 
         vars = get_value_vars_from_user_vars(vars, model)
@@ -563,7 +559,6 @@ class CategoricalGibbsMetropolis(ArrayStep):
         # variable with M categories and y being a 3-D variable with N
         # categories, we will have dimcats = [(0, M), (1, M), (2, N), (3, N), (4, N)].
         for v in vars:
-
             v_init_val = initial_point[v.name]
 
             rv_var = model.values_to_rvs[v]
@@ -707,11 +702,11 @@ class DEMetropolis(PopulationArrayStepShared):
         Some measure of variance to parameterize proposal distribution
     proposal_dist: function
         Function that returns zero-mean deviates when parameterized with
-        S (and n). Defaults to Uniform(-S,+S).
+        S (and n). Defaults to NormalProposal(S).
     scaling: scalar or array
         Initial scale factor for epsilon. Defaults to 0.001
     tune: str
-        Which hyperparameter to tune. Defaults to None, but can also be 'scaling' or 'lambda'.
+        Which hyperparameter to tune. Defaults to 'scaling', but can also be 'lambda' or None.
     tune_interval: int
         The frequency of tuning. Defaults to 100 iterations.
     model: PyMC Model
@@ -748,13 +743,12 @@ class DEMetropolis(PopulationArrayStepShared):
         proposal_dist=None,
         lamb=None,
         scaling=0.001,
-        tune=None,
+        tune: Optional[str] = "scaling",
         tune_interval=100,
         model=None,
         mode=None,
         **kwargs
     ):
-
         model = pm.modelcontext(model)
         initial_values = model.initial_point()
         initial_values_size = sum(initial_values[n.name].size for n in model.value_vars)
@@ -770,7 +764,7 @@ class DEMetropolis(PopulationArrayStepShared):
         if proposal_dist is not None:
             self.proposal_dist = proposal_dist(S)
         else:
-            self.proposal_dist = UniformProposal(S)
+            self.proposal_dist = NormalProposal(S)
 
         self.scaling = np.atleast_1d(scaling).astype("d")
         if lamb is None:
@@ -791,7 +785,6 @@ class DEMetropolis(PopulationArrayStepShared):
         super().__init__(vars, shared)
 
     def astep(self, q0: RaveledVars) -> Tuple[RaveledVars, StatsType]:
-
         point_map_info = q0.point_map_info
         q0d = q0.data
 
@@ -851,11 +844,11 @@ class DEMetropolisZ(ArrayStepShared):
         Some measure of variance to parameterize proposal distribution
     proposal_dist: function
         Function that returns zero-mean deviates when parameterized with
-        S (and n). Defaults to Uniform(-S,+S).
+        S (and n). Defaults to NormalProposal(S).
     scaling: scalar or array
         Initial scale factor for epsilon. Defaults to 0.001
     tune: str
-        Which hyperparameter to tune. Defaults to 'lambda', but can also be 'scaling' or None.
+        Which hyperparameter to tune. Defaults to 'scaling', but can also be 'lambda' or None.
     tune_interval: int
         The frequency of tuning. Defaults to 100 iterations.
     tune_drop_fraction: float
@@ -869,7 +862,7 @@ class DEMetropolisZ(ArrayStepShared):
 
     References
     ----------
-    .. [Braak2006] Cajo C.F. ter Braak (2006).
+    .. [Braak2008] Cajo C.F. ter Braak (2008).
         Differential Evolution Markov Chain with snooker updater and fewer chains.
         Statistics and Computing
         `link <https://doi.org/10.1007/s11222-008-9104-9>`__
@@ -895,7 +888,7 @@ class DEMetropolisZ(ArrayStepShared):
         proposal_dist=None,
         lamb=None,
         scaling=0.001,
-        tune="lambda",
+        tune: Optional[str] = "scaling",
         tune_interval=100,
         tune_drop_fraction: float = 0.9,
         model=None,
@@ -917,7 +910,7 @@ class DEMetropolisZ(ArrayStepShared):
         if proposal_dist is not None:
             self.proposal_dist = proposal_dist(S)
         else:
-            self.proposal_dist = UniformProposal(S)
+            self.proposal_dist = NormalProposal(S)
 
         self.scaling = np.atleast_1d(scaling).astype("d")
         if lamb is None:
@@ -958,7 +951,6 @@ class DEMetropolisZ(ArrayStepShared):
         return
 
     def astep(self, q0: RaveledVars) -> Tuple[RaveledVars, StatsType]:
-
         point_map_info = q0.point_map_info
         q0d = q0.data
 

@@ -1,4 +1,4 @@
-#   Copyright 2022- The PyMC Developers
+#   Copyright 2023 The PyMC Developers
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -41,9 +41,10 @@ import pytest
 import scipy as sp
 import scipy.stats as st
 
-from pymc.logprob import factorized_joint_logprob, joint_logprob
+from pymc.logprob import factorized_joint_logprob
 from pymc.logprob.transforms import LogTransform, TransformValuesRewrite
 from pymc.tests.helpers import assert_no_rvs
+from pymc.tests.logprob.utils import joint_logprob
 
 
 @pytensor.config.change_flags(compute_test_value="raise")

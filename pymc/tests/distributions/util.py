@@ -1,3 +1,16 @@
+#   Copyright 2023 The PyMC Developers
+#
+#   Licensed under the Apache License, Version 2.0 (the "License");
+#   you may not use this file except in compliance with the License.
+#   You may obtain a copy of the License at
+#
+#       http://www.apache.org/licenses/LICENSE-2.0
+#
+#   Unless required by applicable law or agreed to in writing, software
+#   distributed under the License is distributed on an "AS IS" BASIS,
+#   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#   See the License for the specific language governing permissions and
+#   limitations under the License.
 import functools as ft
 import itertools as it
 
@@ -17,10 +30,10 @@ from pytensor.compile.mode import Mode
 
 import pymc as pm
 
-from pymc.distributions import logcdf, logp
-from pymc.distributions.logprob import _joint_logp
 from pymc.distributions.shape_utils import change_dist_size
 from pymc.initial_point import make_initial_point_fn
+from pymc.logprob.abstract import logcdf
+from pymc.logprob.joint_logprob import joint_logp, logp
 from pymc.logprob.utils import ParameterValueError
 from pymc.pytensorf import compile_pymc, floatX, intX
 from pymc.tests.helpers import SeededTest, select_by_precision
@@ -583,7 +596,7 @@ def assert_moment_is_expected(model, expected, check_finite_logp=True):
 
     if check_finite_logp:
         logp_moment = (
-            _joint_logp(
+            joint_logp(
                 (model["x"],),
                 rvs_to_values={model["x"]: at.constant(moment)},
                 rvs_to_transforms={},
@@ -799,7 +812,6 @@ class BaseTestDistributionRandom(SeededTest):
         for (expected_name, expected_value), actual_variable in zip(
             self.expected_rv_op_params.items(), pytensor_dist_inputs
         ):
-
             # Add additional line to evaluate symbolic inputs to distributions
             if isinstance(expected_value, pytensor.tensor.Variable):
                 expected_value = expected_value.eval()

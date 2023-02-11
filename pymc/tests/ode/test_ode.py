@@ -1,4 +1,4 @@
-#   Copyright 2020 The PyMC Developers
+#   Copyright 2023 The PyMC Developers
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -50,11 +50,11 @@ def test_simulate():
 
 
 class TestSensitivityInitialCondition:
-
     t = np.arange(0, 12, 0.25).reshape(-1, 1)
 
     def test_sens_ic_scalar_1_param(self):
         """Tests the creation of the initial condition for the sensitivities"""
+
         # Scalar ODE 1 Param
         # Create an ODe to integrate
         def ode_func_1(y, t, p):

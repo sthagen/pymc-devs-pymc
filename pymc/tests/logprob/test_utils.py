@@ -1,4 +1,4 @@
-#   Copyright 2022- The PyMC Developers
+#   Copyright 2023 The PyMC Developers
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -34,6 +34,8 @@
 #   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 #   SOFTWARE.
 
+import warnings
+
 import numpy as np
 import pytensor
 import pytensor.tensor as at
@@ -43,10 +45,15 @@ from pytensor import function
 from pytensor.compile import get_default_mode
 from pytensor.tensor.random.basic import normal, uniform
 
-from pymc.logprob.abstract import MeasurableVariable, logprob
+import pymc as pm
+
+from pymc.logprob.abstract import MeasurableVariable, get_measurable_outputs, logprob
+from pymc.logprob.joint_logprob import joint_logp
 from pymc.logprob.utils import (
     ParameterValueError,
     dirac_delta,
+    ignore_logprob,
+    reconsider_logprob,
     rvs_to_value_vars,
     walk_model,
 )
@@ -78,7 +85,6 @@ def test_walk_model():
 
 
 def test_rvs_to_value_vars():
-
     a = at.random.uniform(0.0, 1.0)
     a.name = "a"
     a.tag.value_var = a_value_var = a.clone()
@@ -180,7 +186,6 @@ def test_dirac_delta():
     ],
 )
 def test_dirac_delta_logprob(dist_params, obs):
-
     dist_params_at, obs_at, _ = create_pytensor_params(dist_params, obs, ())
     dist_params = dict(zip(dist_params_at, dist_params))
 
@@ -191,3 +196,70 @@ def test_dirac_delta_logprob(dist_params, obs):
         return 0.0 if obs == c else -np.inf
 
     scipy_logprob_tester(x, obs, dist_params, test_fn=scipy_logprob)
+
+
+def test_ignore_reconsider_logprob_basic():
+    x = pm.Normal.dist()
+    (measurable_x_out,) = get_measurable_outputs(x.owner.op, x.owner)
+    assert measurable_x_out is x.owner.outputs[1]
+
+    new_x = ignore_logprob(x)
+    assert new_x is not x
+    assert isinstance(new_x.owner.op, pm.Normal)
+    assert type(new_x.owner.op).__name__ == "UnmeasurableNormalRV"
+    # Confirm that it does not have measurable output
+    assert get_measurable_outputs(new_x.owner.op, new_x.owner) == []
+
+    # Test that it will not clone a variable that is already unmeasurable
+    assert ignore_logprob(new_x) is new_x
+
+    orig_x = reconsider_logprob(new_x)
+    assert orig_x is not new_x
+    assert isinstance(orig_x.owner.op, pm.Normal)
+    assert type(orig_x.owner.op).__name__ == "NormalRV"
+    # Confirm that it has measurable outputs again
+    assert get_measurable_outputs(orig_x.owner.op, orig_x.owner) == [orig_x.owner.outputs[1]]
+
+    # Test that will not clone a variable that is already measurable
+    assert reconsider_logprob(x) is x
+    assert reconsider_logprob(orig_x) is orig_x
+
+
+def test_ignore_reconsider_logprob_model():
+    def custom_logp(value, x):
+        # custom_logp is just the logp of x at value
+        x = reconsider_logprob(x)
+        return joint_logp(
+            [x],
+            rvs_to_values={x: value},
+            rvs_to_transforms={},
+            rvs_to_total_sizes={},
+        )
+
+    with pm.Model():
+        x = pm.Normal.dist()
+        y = pm.CustomDist("y", x, logp=custom_logp)
+    with pytest.warns(
+        UserWarning,
+        match="Found a random variable that was neither among the observations "
+        "nor the conditioned variables",
+    ):
+        joint_logp(
+            [y],
+            rvs_to_values={y: y.type()},
+            rvs_to_transforms={},
+            rvs_to_total_sizes={},
+        )
+
+    # The above warning should go away with ignore_logprob.
+    with pm.Model():
+        x = ignore_logprob(pm.Normal.dist())
+        y = pm.CustomDist("y", x, logp=custom_logp)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert joint_logp(
+            [y],
+            rvs_to_values={y: y.type()},
+            rvs_to_transforms={},
+            rvs_to_total_sizes={},
+        )

@@ -1,4 +1,4 @@
-#   Copyright 2022- The PyMC Developers
+#   Copyright 2023 The PyMC Developers
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -45,10 +45,11 @@ from pytensor.graph.rewriting.utils import rewrite_graph
 from pytensor.tensor.extra_ops import BroadcastTo
 from scipy import stats as st
 
-from pymc.logprob import factorized_joint_logprob, joint_logprob
+from pymc.logprob import factorized_joint_logprob
 from pymc.logprob.rewriting import logprob_rewrites_db
 from pymc.logprob.tensor import naive_bcast_rv_lift
 from pymc.tests.helpers import assert_no_rvs
+from pymc.tests.logprob.utils import joint_logprob
 
 
 def test_naive_bcast_rv_lift():
@@ -246,6 +247,7 @@ def test_measurable_join_univariate(size1, size2, axis, concatenate):
     else:
         base_logps = at.stack(base_logps, axis=axis)
     y_logp = joint_logprob({y_rv: y_vv}, sum=False)
+    assert_no_rvs(y_logp)
 
     base1_testval = base1_rv.eval()
     base2_testval = base2_rv.eval()
@@ -313,6 +315,7 @@ def test_measurable_join_multivariate(size1, supp_size1, size2, supp_size2, axis
         axis_norm = np.core.numeric.normalize_axis_index(axis, base1_rv.ndim + 1)
         base_logps = at.stack(base_logps, axis=axis_norm - 1)
     y_logp = joint_logprob({y_rv: y_vv}, sum=False)
+    assert_no_rvs(y_logp)
 
     base1_testval = base1_rv.eval()
     base2_testval = base2_rv.eval()

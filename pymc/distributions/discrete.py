@@ -1,4 +1,4 @@
-#   Copyright 2020 The PyMC Developers
+#   Copyright 2023 The PyMC Developers
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -44,9 +44,9 @@ from pymc.distributions.dist_math import (
     normal_lcdf,
 )
 from pymc.distributions.distribution import Discrete
-from pymc.distributions.logprob import logp
 from pymc.distributions.mixture import Mixture
 from pymc.distributions.shape_utils import rv_size_is_none
+from pymc.logprob.joint_logprob import logp
 from pymc.math import sigmoid
 from pymc.pytensorf import floatX, intX
 from pymc.vartypes import continuous_types

@@ -1,4 +1,4 @@
-#   Copyright 2022- The PyMC Developers
+#   Copyright 2023 The PyMC Developers
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -49,7 +49,7 @@ from pytensor.scan import scan
 
 from pymc.distributions.transforms import _default_transform, log, logodds
 from pymc.logprob.abstract import MeasurableVariable, _get_measurable_outputs, _logprob
-from pymc.logprob.joint_logprob import factorized_joint_logprob, joint_logprob
+from pymc.logprob.joint_logprob import factorized_joint_logprob
 from pymc.logprob.transforms import (
     ChainedTransform,
     ExpTransform,
@@ -64,6 +64,7 @@ from pymc.logprob.transforms import (
     transformed_variable,
 )
 from pymc.tests.helpers import assert_no_rvs
+from pymc.tests.logprob.utils import joint_logprob
 
 
 class DirichletScipyDist:
@@ -261,7 +262,6 @@ def test_transformed_logprob(at_dist, dist_params, sp_dist, size):
         if a_val.ndim > 0:
 
             def jacobian_estimate_novec(value):
-
                 dim_diff = a_val.ndim - value.ndim  # pylint: disable=cell-var-from-loop
                 if dim_diff > 0:
                     # Make sure the dimensions match the expected input
@@ -672,7 +672,6 @@ def test_log_transform_rv():
     ],
 )
 def test_loc_transform_rv(rv_size, loc_type, addition):
-
     loc = loc_type("loc")
     if addition:
         y_rv = loc + at.random.normal(0, 1, size=rv_size, name="base_rv")
@@ -703,7 +702,6 @@ def test_loc_transform_rv(rv_size, loc_type, addition):
     ],
 )
 def test_scale_transform_rv(rv_size, scale_type, product):
-
     scale = scale_type("scale")
     if product:
         y_rv = at.random.normal(0, 1, size=rv_size, name="base_rv") * scale

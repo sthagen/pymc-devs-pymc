@@ -1,4 +1,4 @@
-#   Copyright 2020 The PyMC Developers
+#   Copyright 2023 The PyMC Developers
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -51,7 +51,6 @@ from pytensor.tensor.var import TensorConstant, TensorVariable
 
 from pymc.blocking import DictToArrayBijection, RaveledVars
 from pymc.data import GenTensorVariable, is_minibatch
-from pymc.distributions.logprob import _joint_logp
 from pymc.distributions.transforms import _default_transform
 from pymc.exceptions import (
     BlockModelAccessError,
@@ -61,6 +60,7 @@ from pymc.exceptions import (
     ShapeWarning,
 )
 from pymc.initial_point import make_initial_point_fn
+from pymc.logprob.joint_logprob import joint_logp
 from pymc.pytensorf import (
     PointFunc,
     SeedSequenceSeed,
@@ -754,7 +754,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
 
         rv_logps: List[TensorVariable] = []
         if rvs:
-            rv_logps = _joint_logp(
+            rv_logps = joint_logp(
                 rvs=rvs,
                 rvs_to_values=self.rvs_to_values,
                 rvs_to_transforms=self.rvs_to_transforms,
@@ -1388,7 +1388,6 @@ class Model(WithMemoization, metaclass=ContextMeta):
 
         mask = getattr(data, "mask", None)
         if mask is not None:
-
             if mask.all():
                 # If there are no observed values, this variable isn't really
                 # observed.
@@ -1752,7 +1751,6 @@ class Model(WithMemoization, metaclass=ContextMeta):
         value_names_to_dtypes = {value.name: value.dtype for value in self.value_vars}
         value_names_set = set(value_names_to_dtypes.keys())
         for elem in start_points:
-
             for k, v in elem.items():
                 elem[k] = np.asarray(v, dtype=value_names_to_dtypes[k])
 

@@ -1,4 +1,4 @@
-#   Copyright 2020 The PyMC Developers
+#   Copyright 2023 The PyMC Developers
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -23,7 +23,6 @@ import pymc as pm
 from pymc import MutableData
 from pymc.distributions.continuous import Exponential, Flat, HalfNormal, Normal, Uniform
 from pymc.distributions.discrete import DiracDelta
-from pymc.distributions.logprob import logp
 from pymc.distributions.multivariate import (
     Dirichlet,
     LKJCholeskyCov,
@@ -40,6 +39,7 @@ from pymc.distributions.timeseries import (
     MvStudentTRandomWalk,
     RandomWalk,
 )
+from pymc.logprob.joint_logprob import logp
 from pymc.model import Model
 from pymc.pytensorf import floatX
 from pymc.sampling.forward import draw, sample_posterior_predictive

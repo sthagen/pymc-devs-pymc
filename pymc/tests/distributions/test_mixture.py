@@ -1,4 +1,4 @@
-#   Copyright 2020 The PyMC Developers
+#   Copyright 2023 The PyMC Developers
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -47,10 +47,10 @@ from pymc.distributions import (
     Triangular,
     Uniform,
 )
-from pymc.distributions.logprob import logp
 from pymc.distributions.mixture import MixtureTransformWarning
 from pymc.distributions.shape_utils import change_dist_size, to_tuple
 from pymc.distributions.transforms import _default_transform
+from pymc.logprob.joint_logprob import logp
 from pymc.logprob.transforms import IntervalTransform, LogTransform, SimplexTransform
 from pymc.math import expand_packed_triangular
 from pymc.model import Model

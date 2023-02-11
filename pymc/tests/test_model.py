@@ -1,4 +1,4 @@
-#   Copyright 2020 The PyMC Developers
+#   Copyright 2023 The PyMC Developers
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -40,9 +40,9 @@ import pymc as pm
 from pymc import Deterministic, Potential
 from pymc.blocking import DictToArrayBijection, RaveledVars
 from pymc.distributions import Normal, transforms
-from pymc.distributions.logprob import _joint_logp
 from pymc.distributions.transforms import log
 from pymc.exceptions import ImputationWarning, ShapeError, ShapeWarning
+from pymc.logprob.joint_logprob import joint_logp
 from pymc.logprob.transforms import IntervalTransform
 from pymc.model import Point, ValueGradFunction, modelcontext
 from pymc.tests.helpers import SeededTest
@@ -572,7 +572,6 @@ def test_make_obs_var():
 
 
 def test_initial_point():
-
     with pm.Model() as model:
         a = pm.Uniform("a")
         x = pm.Normal("x", a)
@@ -597,7 +596,6 @@ def test_initial_point():
 
 
 def test_point_logps():
-
     with pm.Model() as model:
         a = pm.Uniform("a")
         pm.Normal("x", a)
@@ -1434,7 +1432,7 @@ class TestImputationMissingData:
         x_unobs_rv = m["x_missing"]
         x_unobs_vv = m.rvs_to_values[x_unobs_rv]
 
-        logp = _joint_logp(
+        logp = joint_logp(
             [x_obs_rv, x_unobs_rv],
             rvs_to_values={x_obs_rv: x_obs_vv, x_unobs_rv: x_unobs_vv},
             rvs_to_transforms={},

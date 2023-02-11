@@ -1,4 +1,4 @@
-#   Copyright 2022- The PyMC Developers
+#   Copyright 2023 The PyMC Developers
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -37,19 +37,44 @@
 import warnings
 
 from collections import deque
-from typing import Dict, Optional, Union
+from typing import Dict, List, Optional, Sequence, Union
 
-import pytensor.tensor as at
+import numpy as np
+import pytensor
+import pytensor.tensor as pt
 
 from pytensor import config
 from pytensor.graph.basic import graph_inputs, io_toposort
 from pytensor.graph.op import compute_test_value
 from pytensor.graph.rewriting.basic import GraphRewriter, NodeRewriter
+from pytensor.tensor.random.op import RandomVariable
 from pytensor.tensor.var import TensorVariable
 
 from pymc.logprob.abstract import _logprob, get_measurable_outputs
+from pymc.logprob.abstract import logprob as logp_logprob
 from pymc.logprob.rewriting import construct_ir_fgraph
+from pymc.logprob.transforms import RVTransform, TransformValuesRewrite
 from pymc.logprob.utils import rvs_to_value_vars
+from pymc.pytensorf import floatX
+
+
+def logp(rv: TensorVariable, value) -> TensorVariable:
+    """Return the log-probability graph of a Random Variable"""
+
+    value = pt.as_tensor_variable(value, dtype=rv.dtype)
+    try:
+        return logp_logprob(rv, value)
+    except NotImplementedError:
+        try:
+            value = rv.type.filter_variable(value)
+        except TypeError as exc:
+            raise TypeError(
+                "When RV is not a pure distribution, value variable must have the same type"
+            ) from exc
+        try:
+            return factorized_joint_logprob({rv: value}, warn_missing_rvs=False)[value]
+        except Exception as exc:
+            raise NotImplementedError("PyMC could not infer logp of input variable.") from exc
 
 
 def factorized_joint_logprob(
@@ -196,7 +221,6 @@ def factorized_joint_logprob(
             q_logprob_vars = [q_logprob_vars]
 
         for q_value_var, q_logprob_var in zip(q_value_vars, q_logprob_vars):
-
             q_value_var = original_values[q_value_var]
 
             if q_value_var.name:
@@ -224,31 +248,141 @@ def factorized_joint_logprob(
     return logprob_vars
 
 
-def joint_logprob(*args, sum: bool = True, **kwargs) -> Optional[TensorVariable]:
-    """Create a graph representing the joint log-probability/measure of a graph.
+TOTAL_SIZE = Union[int, Sequence[int], None]
 
-    This function calls `factorized_joint_logprob` and returns the combined
-    log-probability factors as a single graph.
+
+def _get_scaling(total_size: TOTAL_SIZE, shape, ndim: int) -> TensorVariable:
+    """
+    Gets scaling constant for logp.
 
     Parameters
     ----------
-    sum: bool
-        If ``True`` each factor is collapsed to a scalar via ``sum`` before
-        being joined with the remaining factors. This may be necessary to
-        avoid incorrect broadcasting among independent factors.
+    total_size: Optional[int|List[int]]
+        size of a fully observed data without minibatching,
+        `None` means data is fully observed
+    shape: shape
+        shape of an observed data
+    ndim: int
+        ndim hint
 
+    Returns
+    -------
+    scalar
     """
-    logprob = factorized_joint_logprob(*args, **kwargs)
-    if not logprob:
-        return None
-    elif len(logprob) == 1:
-        logprob = tuple(logprob.values())[0]
-        if sum:
-            return at.sum(logprob)
+    if total_size is None:
+        coef = 1.0
+    elif isinstance(total_size, int):
+        if ndim >= 1:
+            denom = shape[0]
         else:
-            return logprob
+            denom = 1
+        coef = floatX(total_size) / floatX(denom)
+    elif isinstance(total_size, (list, tuple)):
+        if not all(isinstance(i, int) for i in total_size if (i is not Ellipsis and i is not None)):
+            raise TypeError(
+                "Unrecognized `total_size` type, expected "
+                "int or list of ints, got %r" % total_size
+            )
+        if Ellipsis in total_size:
+            sep = total_size.index(Ellipsis)
+            begin = total_size[:sep]
+            end = total_size[sep + 1 :]
+            if Ellipsis in end:
+                raise ValueError(
+                    "Double Ellipsis in `total_size` is restricted, got %r" % total_size
+                )
+        else:
+            begin = total_size
+            end = []
+        if (len(begin) + len(end)) > ndim:
+            raise ValueError(
+                "Length of `total_size` is too big, "
+                "number of scalings is bigger that ndim, got %r" % total_size
+            )
+        elif (len(begin) + len(end)) == 0:
+            coef = 1.0
+        if len(end) > 0:
+            shp_end = shape[-len(end) :]
+        else:
+            shp_end = np.asarray([])
+        shp_begin = shape[: len(begin)]
+        begin_coef = [
+            floatX(t) / floatX(shp_begin[i]) for i, t in enumerate(begin) if t is not None
+        ]
+        end_coef = [floatX(t) / floatX(shp_end[i]) for i, t in enumerate(end) if t is not None]
+        coefs = begin_coef + end_coef
+        coef = pt.prod(coefs)
     else:
-        if sum:
-            return at.sum([at.sum(factor) for factor in logprob.values()])
-        else:
-            return at.add(*logprob.values())
+        raise TypeError(
+            "Unrecognized `total_size` type, expected int or list of ints, got %r" % total_size
+        )
+    return pt.as_tensor(coef, dtype=pytensor.config.floatX)
+
+
+def _check_no_rvs(logp_terms: Sequence[TensorVariable]):
+    # Raise if there are unexpected RandomVariables in the logp graph
+    # Only SimulatorRVs MinibatchIndexRVs are allowed
+    from pymc.data import MinibatchIndexRV
+    from pymc.distributions.simulator import SimulatorRV
+
+    unexpected_rv_nodes = [
+        node
+        for node in pytensor.graph.ancestors(logp_terms)
+        if (
+            node.owner
+            and isinstance(node.owner.op, RandomVariable)
+            and not isinstance(node.owner.op, (SimulatorRV, MinibatchIndexRV))
+        )
+    ]
+    if unexpected_rv_nodes:
+        raise ValueError(
+            f"Random variables detected in the logp graph: {unexpected_rv_nodes}.\n"
+            "This can happen when DensityDist logp or Interval transform functions "
+            "reference nonlocal variables."
+        )
+
+
+def joint_logp(
+    rvs: Sequence[TensorVariable],
+    *,
+    rvs_to_values: Dict[TensorVariable, TensorVariable],
+    rvs_to_transforms: Dict[TensorVariable, RVTransform],
+    jacobian: bool = True,
+    rvs_to_total_sizes: Dict[TensorVariable, TOTAL_SIZE],
+    **kwargs,
+) -> List[TensorVariable]:
+    """Thin wrapper around pymc.logprob.factorized_joint_logprob, extended with Model
+    specific concerns such as transforms, jacobian, and scaling"""
+
+    transform_rewrite = None
+    values_to_transforms = {
+        rvs_to_values[rv]: transform
+        for rv, transform in rvs_to_transforms.items()
+        if transform is not None
+    }
+    if values_to_transforms:
+        # There seems to be an incorrect type hint in TransformValuesRewrite
+        transform_rewrite = TransformValuesRewrite(values_to_transforms)  # type: ignore
+
+    temp_logp_terms = factorized_joint_logprob(
+        rvs_to_values,
+        extra_rewrites=transform_rewrite,
+        use_jacobian=jacobian,
+        **kwargs,
+    )
+
+    # The function returns the logp for every single value term we provided to it. This
+    # includes the extra values we plugged in above, so we filter those we actually
+    # wanted in the same order they were given in.
+    logp_terms = {}
+    for rv in rvs:
+        value_var = rvs_to_values[rv]
+        logp_term = temp_logp_terms[value_var]
+        total_size = rvs_to_total_sizes.get(rv, None)
+        if total_size is not None:
+            scaling = _get_scaling(total_size, value_var.shape, value_var.ndim)
+            logp_term *= scaling
+        logp_terms[value_var] = logp_term
+
+    _check_no_rvs(list(logp_terms.values()))
+    return list(logp_terms.values())

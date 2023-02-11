@@ -1,4 +1,4 @@
-#   Copyright 2020 The PyMC Developers
+#   Copyright 2023 The PyMC Developers
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -49,7 +49,6 @@ class Competence(IntEnum):
 
 
 class BlockedStep(ABC):
-
     stats_dtypes: List[Dict[str, type]] = []
     vars: List[Variable] = []
 
@@ -198,9 +197,12 @@ class StatsBijection:
         return stats_dict
 
     def rmap(self, stats_dict: Mapping[str, Any]) -> StatsType:
-        """Split a global stats dict into a list of sampler-wise stats dicts."""
+        """Split a global stats dict into a list of sampler-wise stats dicts.
+
+        The ``stats_dict`` can be a subset of all sampler stats.
+        """
         stats_list = []
         for namemap in self._stat_groups:
-            d = {statname: stats_dict[sname] for sname, statname in namemap}
+            d = {statname: stats_dict[sname] for sname, statname in namemap if sname in stats_dict}
             stats_list.append(d)
         return stats_list

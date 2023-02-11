@@ -1,4 +1,4 @@
-#   Copyright 2020 The PyMC Developers
+#   Copyright 2023 The PyMC Developers
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -26,9 +26,10 @@ from pytensor.compile.mode import Mode
 
 import pymc as pm
 
-from pymc.distributions import logcdf, logp
 from pymc.distributions.continuous import Normal, get_tau_sigma, interpolated
 from pymc.distributions.dist_math import clipped_beta_rvs
+from pymc.logprob.abstract import logcdf
+from pymc.logprob.joint_logprob import logp
 from pymc.logprob.utils import ParameterValueError
 from pymc.pytensorf import floatX
 from pymc.tests.distributions.util import (
@@ -56,7 +57,6 @@ try:
 
     _polyagamma_not_installed = False
 except ImportError:  # pragma: no cover
-
     _polyagamma_not_installed = True
 
     def polyagamma_pdf(*args, **kwargs):
@@ -618,10 +618,13 @@ class TestMatchesScipy:
         reason="Fails on float32 due to numerical issues",
     )
     def test_weibull_logp(self):
+        # SciPy has new (?) precision issues at {alpha=20, beta=2, x=100}
+        # We circumvent it by skipping alpha=20:
+        rplusbig = Domain([0, 0.5, 0.9, 0.99, 1, 1.5, 2, np.inf])
         check_logp(
             pm.Weibull,
             Rplus,
-            {"alpha": Rplusbig, "beta": Rplusbig},
+            {"alpha": rplusbig, "beta": Rplusbig},
             lambda value, alpha, beta: st.exponweib.logpdf(value, 1, alpha, scale=beta),
         )
 
@@ -2023,6 +2026,16 @@ class TestBetaMuSigma(BaseTestDistributionRandom):
     checks_to_run = ["check_pymc_params_match_rv_op"]
 
 
+class TestBetaMuNu(BaseTestDistributionRandom):
+    pymc_dist = pm.Beta
+    pymc_dist_params = {"mu": 0.5, "nu": 3}
+    expected_alpha, expected_beta = pm.Beta.get_alpha_beta(
+        mu=pymc_dist_params["mu"], nu=pymc_dist_params["nu"]
+    )
+    expected_rv_op_params = {"alpha": expected_alpha, "beta": expected_beta}
+    checks_to_run = ["check_pymc_params_match_rv_op"]
+
+
 class TestExponential(BaseTestDistributionRandom):
     pymc_dist = pm.Exponential
     pymc_dist_params = {"lam": 10.0}
@@ -2264,7 +2277,6 @@ class TestICDF:
         ],
     )
     def test_normal_icdf(self, dist_params, obs, size):
-
         dist_params_at, obs_at, size_at = create_pytensor_params(dist_params, obs, size)
         dist_params = dict(zip(dist_params_at, dist_params))
 

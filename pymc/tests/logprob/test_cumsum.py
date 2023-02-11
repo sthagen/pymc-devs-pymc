@@ -1,4 +1,4 @@
-#   Copyright 2022- The PyMC Developers
+#   Copyright 2023 The PyMC Developers
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -40,8 +40,8 @@ import pytensor.tensor as at
 import pytest
 import scipy.stats as st
 
-from pymc.logprob import joint_logprob
 from pymc.tests.helpers import assert_no_rvs
+from pymc.tests.logprob.utils import joint_logprob
 
 
 @pytest.mark.parametrize(

@@ -1,4 +1,4 @@
-#   Copyright 2020 The PyMC Developers
+#   Copyright 2023 The PyMC Developers
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -32,8 +32,8 @@ from typing_extensions import Protocol, TypeAlias
 
 import pymc as pm
 
-from pymc.backends import _init_trace
-from pymc.backends.base import BaseTrace, MultiTrace, _choose_chains
+from pymc.backends import init_traces
+from pymc.backends.base import BaseTrace, IBaseTrace, MultiTrace, _choose_chains
 from pymc.blocking import DictToArrayBijection
 from pymc.exceptions import SamplingError
 from pymc.initial_point import PointType, StartDict, make_initial_point_fns_per_chain
@@ -71,7 +71,7 @@ Step: TypeAlias = Union[BlockedStep, CompoundStep]
 class SamplingIteratorCallback(Protocol):
     """Signature of the callable that may be passed to `pm.sample(callable=...)`."""
 
-    def __call__(self, trace: BaseTrace, draw: Draw):
+    def __call__(self, trace: IBaseTrace, draw: Draw):
         pass
 
 
@@ -486,21 +486,21 @@ def sample(
         initial_points = [ipfn(seed) for ipfn, seed in zip(ipfns, random_seed_list)]
 
     # One final check that shapes and logps at the starting points are okay.
+    ip: Dict[str, np.ndarray]
     for ip in initial_points:
         model.check_start_vals(ip)
         _check_start_shape(model, ip)
 
     # Create trace backends for each chain
-    traces = [
-        _init_trace(
-            expected_length=draws + tune,
-            stats_dtypes=step.stats_dtypes,
-            chain_number=chain_number,
-            trace=trace,
-            model=model,
-        )
-        for chain_number in range(chains)
-    ]
+    traces = init_traces(
+        backend=trace,
+        chains=chains,
+        expected_length=draws + tune,
+        step=step,
+        var_dtypes={vn: v.dtype for vn, v in ip.items()},
+        var_shapes={vn: v.shape for vn, v in ip.items()},
+        model=model,
+    )
 
     sample_args = {
         "draws": draws,
@@ -580,10 +580,8 @@ def sample(
     # count the number of tune/draw iterations that happened
     # ideally via the "tune" statistic, but not all samplers record it!
     if "tune" in mtrace.stat_names:
-        stat = mtrace.get_sampler_stats("tune", chains=0)
-        # when CompoundStep is used, the stat is 2 dimensional!
-        if len(stat.shape) == 2:
-            stat = stat[:, 0]
+        # Get the tune stat directly from chain 0, sampler 0
+        stat = mtrace._straces[0].get_sampler_stats("tune", sampler_idx=0)
         stat = tuple(stat)
         n_tune = stat.count(True)
         n_draws = stat.count(False)
@@ -657,7 +655,7 @@ def _sample_many(
     *,
     draws: int,
     chains: int,
-    traces: Sequence[BaseTrace],
+    traces: Sequence[IBaseTrace],
     start: Sequence[PointType],
     random_seed: Optional[Sequence[RandomSeed]],
     step: Step,
@@ -701,7 +699,7 @@ def _sample(
     start: PointType,
     draws: int,
     step: Step,
-    trace: BaseTrace,
+    trace: IBaseTrace,
     tune: int,
     model: Optional[Model] = None,
     callback=None,
@@ -726,8 +724,8 @@ def _sample(
         The number of samples to draw
     step : function
         Step function
-    trace : backend, optional
-        A backend instance.
+    trace
+        A chain backend to record draws and stats.
     tune : int
         Number of iterations to tune.
     model : Model (optional if in ``with`` context)
@@ -767,7 +765,7 @@ def _iter_sample(
     draws: int,
     step: Step,
     start: PointType,
-    trace: BaseTrace,
+    trace: IBaseTrace,
     chain: int = 0,
     tune: int = 0,
     model: Optional[Model] = None,
@@ -785,8 +783,8 @@ def _iter_sample(
     start : dict
         Starting point in parameter space (or partial point).
         Must contain numeric (transformed) initial values for all (transformed) free variables.
-    trace : backend
-        A backend instance.
+    trace
+        A chain backend to record draws and stats.
     chain : int, optional
         Chain number used to store sample in backend.
     tune : int, optional
@@ -852,7 +850,7 @@ def _mp_sample(
     random_seed: Sequence[RandomSeed],
     start: Sequence[PointType],
     progressbar: bool = True,
-    traces: Sequence[BaseTrace],
+    traces: Sequence[IBaseTrace],
     model: Optional[Model] = None,
     callback: Optional[SamplingIteratorCallback] = None,
     mp_ctx=None,
@@ -879,9 +877,8 @@ def _mp_sample(
         Dicts must contain numeric (transformed) initial values for all (transformed) free variables.
     progressbar : bool
         Whether or not to display a progress bar in the command line.
-    trace : BaseTrace, optional
-        A backend instance, or None.
-        If None, the NDArray backend is used.
+    traces
+        Recording backends for each chain.
     model : Model (optional if in ``with`` context)
     callback
         A function which gets called for every sample from the trace of a chain. The function is
