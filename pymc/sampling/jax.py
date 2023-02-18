@@ -14,10 +14,11 @@
 import os
 import re
 import sys
-import warnings
 
 from functools import partial
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
+
+from pytensor.tensor.random.type import RandomType
 
 from pymc.initial_point import StartDict
 from pymc.sampling.mcmc import _init_jitter
@@ -47,10 +48,12 @@ from pytensor.tensor.shape import SpecifyShape
 from pymc import Model, modelcontext
 from pymc.backends.arviz import find_constants, find_observations
 from pymc.logprob.utils import CheckParameterValue
-from pymc.util import RandomSeed, _get_seeds_per_chain, get_default_varnames
-
-warnings.warn("This module is experimental.")
-
+from pymc.util import (
+    RandomSeed,
+    RandomState,
+    _get_seeds_per_chain,
+    get_default_varnames,
+)
 
 __all__ = (
     "get_jaxified_graph",
@@ -84,6 +87,11 @@ def _replace_shared_variables(graph: List[TensorVariable]) -> List[TensorVariabl
     """
 
     shared_variables = [var for var in graph_inputs(graph) if isinstance(var, SharedVariable)]
+
+    if any(isinstance(var.type, RandomType) for var in shared_variables):
+        raise ValueError(
+            "Graph contains shared RandomType variables which cannot be safely replaced"
+        )
 
     if any(var.default_update is not None for var in shared_variables):
         raise ValueError(
@@ -305,7 +313,7 @@ def sample_blackjax_nuts(
     tune: int = 1000,
     chains: int = 4,
     target_accept: float = 0.8,
-    random_seed: Optional[RandomSeed] = None,
+    random_seed: Optional[RandomState] = None,
     initvals: Optional[Union[StartDict, Sequence[Optional[StartDict]]]] = None,
     model: Optional[Model] = None,
     var_names: Optional[Sequence[str]] = None,
@@ -515,7 +523,7 @@ def sample_numpyro_nuts(
     tune: int = 1000,
     chains: int = 4,
     target_accept: float = 0.8,
-    random_seed: Optional[RandomSeed] = None,
+    random_seed: Optional[RandomState] = None,
     initvals: Optional[Union[StartDict, Sequence[Optional[StartDict]]]] = None,
     model: Optional[Model] = None,
     var_names: Optional[Sequence[str]] = None,
