@@ -32,8 +32,8 @@ from typing_extensions import Protocol, TypeAlias
 
 import pymc as pm
 
-from pymc.backends import init_traces
-from pymc.backends.base import BaseTrace, IBaseTrace, MultiTrace, _choose_chains
+from pymc.backends import RunType, TraceOrBackend, init_traces
+from pymc.backends.base import IBaseTrace, MultiTrace, _choose_chains
 from pymc.blocking import DictToArrayBijection
 from pymc.exceptions import SamplingError
 from pymc.initial_point import PointType, StartDict, make_initial_point_fns_per_chain
@@ -168,6 +168,11 @@ def assign_step_methods(model, step=None, methods=None, step_kwargs=None):
         except TypeError:
             steps.append(step)
         for step in steps:
+            for var in step.vars:
+                if var not in model.value_vars:
+                    raise ValueError(
+                        f"{var} assigned to {step} sampler is not a value variable in the model. You can use `util.get_value_vars_from_user_vars` to parse user provided variables."
+                    )
             assigned_vars = assigned_vars.union(set(step.vars))
 
     # Use competence classmethods to select step methods for remaining
@@ -323,12 +328,12 @@ def sample(
     init: str = "auto",
     jitter_max_retries: int = 10,
     n_init: int = 200_000,
-    trace: Optional[BaseTrace] = None,
+    trace: Optional[TraceOrBackend] = None,
     discard_tuned_samples: bool = True,
     compute_convergence_checks: bool = True,
     keep_warning_stat: bool = False,
     return_inferencedata: bool = True,
-    idata_kwargs: dict = None,
+    idata_kwargs: Optional[Dict[str, Any]] = None,
     callback=None,
     mp_ctx=None,
     model: Optional[Model] = None,
@@ -604,13 +609,12 @@ def sample(
         _check_start_shape(model, ip)
 
     # Create trace backends for each chain
-    traces = init_traces(
+    run, traces = init_traces(
         backend=trace,
         chains=chains,
         expected_length=draws + tune,
         step=step,
-        var_dtypes={vn: v.dtype for vn, v in ip.items()},
-        var_shapes={vn: v.shape for vn, v in ip.items()},
+        initial_point=ip,
         model=model,
     )
 
@@ -682,7 +686,38 @@ def sample(
 
     t_sampling = time.time() - t_start
 
-    # Wrap chain traces in a MultiTrace
+    # Packaging, validating and returning the result was extracted
+    # into a function to make it easier to test and refactor.
+    return _sample_return(
+        run=run,
+        traces=traces,
+        tune=tune,
+        t_sampling=t_sampling,
+        discard_tuned_samples=discard_tuned_samples,
+        compute_convergence_checks=compute_convergence_checks,
+        return_inferencedata=return_inferencedata,
+        keep_warning_stat=keep_warning_stat,
+        idata_kwargs=idata_kwargs or {},
+        model=model,
+    )
+
+
+def _sample_return(
+    *,
+    run: Optional[RunType],
+    traces: Sequence[IBaseTrace],
+    tune: int,
+    t_sampling: float,
+    discard_tuned_samples: bool,
+    compute_convergence_checks: bool,
+    return_inferencedata: bool,
+    keep_warning_stat: bool,
+    idata_kwargs: Dict[str, Any],
+    model: Model,
+) -> Union[InferenceData, MultiTrace]:
+    """Final step of `pm.sampler` that picks/slices chains,
+    runs diagnostics and converts to the desired return type."""
+    # Pick and slice chains to keep the maximum number of samples
     if discard_tuned_samples:
         traces, length = _choose_chains(traces, tune)
     else:
@@ -720,8 +755,7 @@ def sample(
     idata = None
     if compute_convergence_checks or return_inferencedata:
         ikwargs: Dict[str, Any] = dict(model=model, save_warmup=not discard_tuned_samples)
-        if idata_kwargs:
-            ikwargs.update(idata_kwargs)
+        ikwargs.update(idata_kwargs)
         idata = pm.to_inference_data(mtrace, **ikwargs)
 
         if compute_convergence_checks:
