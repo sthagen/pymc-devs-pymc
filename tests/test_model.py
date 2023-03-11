@@ -45,9 +45,9 @@ from pymc.exceptions import ImputationWarning, ShapeError, ShapeWarning
 from pymc.logprob.joint_logprob import joint_logp
 from pymc.logprob.transforms import IntervalTransform
 from pymc.model import Point, ValueGradFunction, modelcontext
+from pymc.testing import SeededTest
 from pymc.util import _FutureWarningValidatingScratchpad
 from pymc.variational.minibatch_rv import MinibatchRandomVariable
-from tests.helpers import SeededTest
 from tests.models import simple_model
 
 
@@ -1060,6 +1060,26 @@ def test_deterministic():
 
     assert model.y == y
     assert model["y"] == y
+
+
+def test_determinsitic_with_dims():
+    """
+    Test to check the passing of dims to the potential
+    """
+    with pm.Model(coords={"observed": range(10)}) as model:
+        x = pm.Normal("x", 0, 1)
+        y = pm.Deterministic("y", x**2, dims=("observed",))
+    assert model.named_vars_to_dims == {"y": ("observed",)}
+
+
+def test_potential_with_dims():
+    """
+    Test to check the passing of dims to the potential
+    """
+    with pm.Model(coords={"observed": range(10)}) as model:
+        x = pm.Normal("x", 0, 1)
+        y = pm.Potential("y", x**2, dims=("observed",))
+    assert model.named_vars_to_dims == {"y": ("observed",)}
 
 
 def test_empty_model_representation():
