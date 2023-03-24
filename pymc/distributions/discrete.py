@@ -1058,6 +1058,15 @@ class DiscreteUniform(Discrete):
             msg="lower <= upper",
         )
 
+    def icdf(value, lower, upper):
+        res = pt.ceil(value * (upper - lower + 1)).astype("int64") + lower - 1
+        res = check_icdf_value(res, value)
+        return check_icdf_parameters(
+            res,
+            lower <= upper,
+            msg="lower <= upper",
+        )
+
 
 class Categorical(Discrete):
     R"""
@@ -1572,7 +1581,7 @@ class OrderedLogistic:
         # Ordered logistic regression
         with pm.Model() as model:
             cutpoints = pm.Normal("cutpoints", mu=[-1,1], sigma=10, shape=2,
-                                  transform=pm.distributions.transforms.ordered)
+                                  transform=pm.distributions.transforms.univariate_ordered)
             y_ = pm.OrderedLogistic("y", cutpoints=cutpoints, eta=x, observed=y)
             idata = pm.sample()
 
