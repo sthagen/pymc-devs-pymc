@@ -39,52 +39,34 @@ from typing import List, Optional
 import pytensor.tensor as pt
 
 from pytensor.graph.rewriting.basic import node_rewriter
-from pytensor.tensor.extra_ops import CumOp
+from pytensor.raise_op import CheckAndRaise, ExceptionType
+from pytensor.tensor.shape import SpecifyShape
 
 from pymc.logprob.abstract import MeasurableVariable, _logprob, _logprob_helper
 from pymc.logprob.rewriting import PreserveRVMappings, measurable_ir_rewrites_db
 from pymc.logprob.utils import ignore_logprob
 
 
-class MeasurableCumsum(CumOp):
-    """A placeholder used to specify a log-likelihood for a cumsum sub-graph."""
+class MeasurableSpecifyShape(SpecifyShape):
+    """A placeholder used to specify a log-likelihood for a specify-shape sub-graph."""
 
 
-MeasurableVariable.register(MeasurableCumsum)
+MeasurableVariable.register(MeasurableSpecifyShape)
 
 
-@_logprob.register(MeasurableCumsum)
-def logprob_cumsum(op, values, base_rv, **kwargs):
-    """Compute the log-likelihood graph for a `Cumsum`."""
+@_logprob.register(MeasurableSpecifyShape)
+def logprob_specify_shape(op, values, inner_rv, *shapes, **kwargs):
     (value,) = values
-
-    value_diff = pt.diff(value, axis=op.axis)
-    value_diff = pt.concatenate(
-        (
-            # Take first element of axis and add a broadcastable dimension so
-            # that it can be concatenated with the rest of value_diff
-            pt.shape_padaxis(
-                pt.take(value, 0, axis=op.axis),
-                axis=op.axis,
-            ),
-            value_diff,
-        ),
-        axis=op.axis,
-    )
-
-    cumsum_logp = _logprob_helper(base_rv, value_diff)
-
-    return cumsum_logp
+    # transfer specify_shape from rv to value
+    value = pt.specify_shape(value, shapes)
+    return _logprob_helper(inner_rv, value)
 
 
-@node_rewriter([CumOp])
-def find_measurable_cumsums(fgraph, node) -> Optional[List[MeasurableCumsum]]:
-    r"""Finds `Cumsums`\s for which a `logprob` can be computed."""
+@node_rewriter([SpecifyShape])
+def find_measurable_specify_shapes(fgraph, node) -> Optional[List[MeasurableSpecifyShape]]:
+    r"""Finds `SpecifyShapeOp`\s for which a `logprob` can be computed."""
 
-    if not (isinstance(node.op, CumOp) and node.op.mode == "add"):
-        return None  # pragma: no cover
-
-    if isinstance(node.op, MeasurableCumsum):
+    if isinstance(node.op, MeasurableSpecifyShape):
         return None  # pragma: no cover
 
     rv_map_feature: Optional[PreserveRVMappings] = getattr(fgraph, "preserve_rv_mappings", None)
@@ -94,7 +76,8 @@ def find_measurable_cumsums(fgraph, node) -> Optional[List[MeasurableCumsum]]:
 
     rv = node.outputs[0]
 
-    base_rv = node.inputs[0]
+    base_rv, *shape = node.inputs
+
     if not (
         base_rv.owner
         and isinstance(base_rv.owner.op, MeasurableVariable)
@@ -102,22 +85,74 @@ def find_measurable_cumsums(fgraph, node) -> Optional[List[MeasurableCumsum]]:
     ):
         return None  # pragma: no cover
 
-    # Check that cumsum does not mix dimensions
-    if base_rv.ndim > 1 and node.op.axis is None:
-        return None
-
-    new_op = MeasurableCumsum(axis=node.op.axis or 0, mode="add")
+    new_op = MeasurableSpecifyShape()
     # Make base_var unmeasurable
     unmeasurable_base_rv = ignore_logprob(base_rv)
-    new_rv = new_op.make_node(unmeasurable_base_rv).default_output()
+    new_rv = new_op.make_node(unmeasurable_base_rv, *shape).default_output()
     new_rv.name = rv.name
 
     return [new_rv]
 
 
 measurable_ir_rewrites_db.register(
-    "find_measurable_cumsums",
-    find_measurable_cumsums,
+    "find_measurable_specify_shapes",
+    find_measurable_specify_shapes,
     "basic",
-    "cumsum",
+    "specify_shape",
+)
+
+
+class MeasurableCheckAndRaise(CheckAndRaise):
+    """A placeholder used to specify a log-likelihood for an assert sub-graph."""
+
+
+MeasurableVariable.register(MeasurableCheckAndRaise)
+
+
+@_logprob.register(MeasurableCheckAndRaise)
+def logprob_assert(op, values, inner_rv, *assertion, **kwargs):
+    (value,) = values
+    # transfer assertion from rv to value
+    value = op(assertion, value)
+    return _logprob_helper(inner_rv, value)
+
+
+@node_rewriter([CheckAndRaise])
+def find_measurable_asserts(fgraph, node) -> Optional[List[MeasurableCheckAndRaise]]:
+    r"""Finds `AssertOp`\s for which a `logprob` can be computed."""
+
+    if isinstance(node.op, MeasurableCheckAndRaise):
+        return None  # pragma: no cover
+
+    rv_map_feature: Optional[PreserveRVMappings] = getattr(fgraph, "preserve_rv_mappings", None)
+
+    if rv_map_feature is None:
+        return None  # pragma: no cover
+
+    rv = node.outputs[0]
+
+    base_rv, *conds = node.inputs
+
+    if not (
+        base_rv.owner
+        and isinstance(base_rv.owner.op, MeasurableVariable)
+        and base_rv not in rv_map_feature.rv_values
+    ):
+        return None  # pragma: no cover
+
+    exception_type = ExceptionType()
+    new_op = MeasurableCheckAndRaise(exc_type=exception_type)
+    # Make base_var unmeasurable
+    unmeasurable_base_rv = ignore_logprob(base_rv)
+    new_rv = new_op.make_node(unmeasurable_base_rv, *conds).default_output()
+    new_rv.name = rv.name
+
+    return [new_rv]
+
+
+measurable_ir_rewrites_db.register(
+    "find_measurable_asserts",
+    find_measurable_asserts,
+    "basic",
+    "assert",
 )

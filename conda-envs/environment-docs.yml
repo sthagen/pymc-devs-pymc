@@ -23,13 +23,13 @@ dependencies:
 - myst-nb
 - numpydoc
 - pre-commit>=2.8.0
+- pymc-sphinx-theme==0.13
 - sphinx-copybutton
 - sphinx-design
 - sphinx-notfound-page
-- sphinx>=1.5
+- sphinx>=5
 - sphinxext-rediraffe
 - watermark
 - sphinx-remove-toctrees
 - pip:
-  - git+https://github.com/pymc-devs/pymc-sphinx-theme
   - numdifftools>=0.9.40

@@ -56,7 +56,7 @@ from pytensor.tensor.random.basic import (
 from pytensor.tensor.random.op import RandomVariable
 from pytensor.tensor.var import TensorConstant
 
-from pymc.logprob.abstract import _logprob, logcdf, logprob
+from pymc.logprob.abstract import _logcdf_helper, _logprob_helper
 
 try:
     from polyagamma import polyagamma_cdf, polyagamma_pdf, random_polyagamma
@@ -234,24 +234,26 @@ def get_tau_sigma(tau=None, sigma=None):
             tau = 1.0
         else:
             if isinstance(sigma, Variable):
-                sigma_ = check_parameters(sigma, sigma > 0, msg="sigma > 0")
+                # Keep tau negative, if sigma was negative, so that it will fail when used
+                tau = (sigma**-2.0) * pt.sgn(sigma)
             else:
                 sigma_ = np.asarray(sigma)
                 if np.any(sigma_ <= 0):
                     raise ValueError("sigma must be positive")
-            tau = sigma_**-2.0
+                tau = sigma_**-2.0
 
     else:
         if sigma is not None:
             raise ValueError("Can't pass both tau and sigma")
         else:
             if isinstance(tau, Variable):
-                tau_ = check_parameters(tau, tau > 0, msg="tau > 0")
+                # Keep sigma negative, if tau was negative, so that it will fail when used
+                sigma = pt.abs(tau) ** (-0.5) * pt.sgn(tau)
             else:
                 tau_ = np.asarray(tau)
                 if np.any(tau_ <= 0):
                     raise ValueError("tau must be positive")
-            sigma = tau_**-0.5
+                sigma = tau_**-0.5
 
     return floatX(tau), floatX(sigma)
 
@@ -722,7 +724,7 @@ class TruncatedNormal(BoundedContinuous):
         else:
             norm = 0.0
 
-        logp = _logprob(normal, (value,), None, None, None, mu, sigma) - norm
+        logp = _logprob_helper(Normal.dist(mu, sigma), value) - norm
 
         if is_lower_bounded:
             logp = pt.switch(value < lower, -np.inf, logp)
@@ -2033,7 +2035,7 @@ class HalfCauchy(PositiveContinuous):
         return beta
 
     def logp(value, loc, beta):
-        res = pt.log(2) + logprob(Cauchy.dist(loc, beta), value)
+        res = pt.log(2) + _logprob_helper(Cauchy.dist(loc, beta), value)
         res = pt.switch(pt.ge(value, loc), res, -np.inf)
         return check_parameters(
             res,
@@ -2342,10 +2344,10 @@ class ChiSquared(PositiveContinuous):
         return moment
 
     def logp(value, nu):
-        return logprob(Gamma.dist(alpha=nu / 2, beta=0.5), value)
+        return _logprob_helper(Gamma.dist(alpha=nu / 2, beta=0.5), value)
 
     def logcdf(value, nu):
-        return logcdf(Gamma.dist(alpha=nu / 2, beta=0.5), value)
+        return _logcdf_helper(Gamma.dist(alpha=nu / 2, beta=0.5), value)
 
 
 # TODO: Remove this once logp for multiplication is working!

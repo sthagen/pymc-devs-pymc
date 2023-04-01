@@ -77,8 +77,12 @@ from pymc.logprob.abstract import (
     MeasurableElemwise,
     MeasurableVariable,
     _get_measurable_outputs,
+    _icdf,
+    _icdf_helper,
+    _logcdf,
+    _logcdf_helper,
     _logprob,
-    logprob,
+    _logprob_helper,
 )
 from pymc.logprob.rewriting import PreserveRVMappings, measurable_ir_rewrites_db
 from pymc.logprob.utils import ignore_logprob, walk_model
@@ -369,19 +373,57 @@ def measurable_transform_logprob(op: MeasurableTransform, values, *inputs, **kwa
     # Some transformations, like squaring may produce multiple backward values
     if isinstance(backward_value, tuple):
         input_logprob = pt.logaddexp(
-            *(logprob(measurable_input, backward_val, **kwargs) for backward_val in backward_value)
+            *(
+                _logprob_helper(measurable_input, backward_val, **kwargs)
+                for backward_val in backward_value
+            )
         )
     else:
-        input_logprob = logprob(measurable_input, backward_value)
-
-    if input_logprob.ndim < value.ndim:
-        # Do we just need to sum the jacobian terms across the support dims?
-        raise NotImplementedError("Transform of multivariate RVs not implemented")
+        input_logprob = _logprob_helper(measurable_input, backward_value)
 
     jacobian = op.transform_elemwise.log_jac_det(value, *other_inputs)
 
+    if input_logprob.ndim < value.ndim:
+        # For multivariate variables, the Jacobian is diagonal.
+        # We can get the right result by summing the last dimensions
+        # of `transform_elemwise.log_jac_det`
+        ndim_supp = value.ndim - input_logprob.ndim
+        jacobian = jacobian.sum(axis=tuple(range(-ndim_supp, 0)))
+
     # The jacobian is used to ensure a value in the supported domain was provided
     return pt.switch(pt.isnan(jacobian), -np.inf, input_logprob + jacobian)
+
+
+@_logcdf.register(MeasurableTransform)
+def measurable_transform_logcdf(op: MeasurableTransform, value, *inputs, **kwargs):
+    """Compute the log-CDF graph for a `MeasurabeTransform`."""
+    other_inputs = list(inputs)
+    measurable_input = other_inputs.pop(op.measurable_input_idx)
+
+    backward_value = op.transform_elemwise.backward(value, *other_inputs)
+
+    # Some transformations, like squaring may produce multiple backward values
+    if isinstance(backward_value, tuple):
+        raise NotImplementedError
+
+    input_logcdf = _logcdf_helper(measurable_input, backward_value)
+
+    # The jacobian is used to ensure a value in the supported domain was provided
+    jacobian = op.transform_elemwise.log_jac_det(value, *other_inputs)
+
+    return pt.switch(pt.isnan(jacobian), -np.inf, input_logcdf)
+
+
+@_icdf.register(MeasurableTransform)
+def measurable_transform_icdf(op: MeasurableTransform, value, *inputs, **kwargs):
+    """Compute the inverse CDF graph for a `MeasurabeTransform`."""
+    other_inputs = list(inputs)
+    measurable_input = other_inputs.pop(op.measurable_input_idx)
+
+    input_icdf = _icdf_helper(measurable_input, value)
+    icdf = op.transform_elemwise.forward(input_icdf, *other_inputs)
+
+    return icdf
 
 
 @node_rewriter([reciprocal])
@@ -674,7 +716,7 @@ class ScaleTransform(RVTransform):
 
     def log_jac_det(self, value, *inputs):
         scale = self.transform_args_fn(*inputs)
-        return -pt.log(pt.abs(scale))
+        return -pt.log(pt.abs(pt.broadcast_to(scale, value.shape)))
 
 
 class LogTransform(RVTransform):
@@ -892,7 +934,8 @@ class ChainedTransform(RVTransform):
         det = 0.0
         for det_ in det_list:
             if det_.ndim > ndim0:
-                det += det_.sum(axis=-1)
+                ndim_diff = det_.ndim - ndim0
+                det += det_.sum(axis=tuple(range(-ndim_diff, 0)))
             else:
                 det += det_
         return det

@@ -59,7 +59,7 @@ from pymc.logprob.abstract import (
     _logprob,
     get_measurable_outputs,
 )
-from pymc.logprob.joint_logprob import factorized_joint_logprob
+from pymc.logprob.basic import factorized_joint_logprob
 from pymc.logprob.rewriting import (
     construct_ir_fgraph,
     inc_subtensor_ops,
@@ -351,6 +351,8 @@ def logprob_ScanRV(op, values, *inputs, name=None, **kwargs):
     # Return only the logp outputs, not any potentially carried states
     logp_outputs = logp_scan_out[-len(values) :]
 
+    if len(logp_outputs) == 1:
+        return logp_outputs[0]
     return logp_outputs
 
 
