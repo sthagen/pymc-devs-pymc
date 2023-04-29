@@ -19,8 +19,9 @@ import pytensor.tensor as pt
 from pytensor.graph.basic import Node
 from pytensor.graph.fg import FunctionGraph
 from pytensor.graph.rewriting.basic import node_rewriter
-from pytensor.scalar.basic import GE, GT, LE, LT
-from pytensor.tensor.math import ge, gt, le, lt
+from pytensor.scalar.basic import GE, GT, LE, LT, Invert
+from pytensor.tensor import TensorVariable
+from pytensor.tensor.math import ge, gt, invert, le, lt
 
 from pymc.logprob.abstract import (
     MeasurableElemwise,
@@ -50,26 +51,49 @@ def find_measurable_comparisons(
     if isinstance(node.op, MeasurableComparison):
         return None  # pragma: no cover
 
-    (compared_var,) = node.outputs
-    base_var, const = node.inputs
+    measurable_inputs = [
+        (inp, idx)
+        for idx, inp in enumerate(node.inputs)
+        if inp.owner
+        and isinstance(inp.owner.op, MeasurableVariable)
+        and inp not in rv_map_feature.rv_values
+    ]
 
-    if not (
-        base_var.owner
-        and isinstance(base_var.owner.op, MeasurableVariable)
-        and base_var not in rv_map_feature.rv_values
-    ):
+    if len(measurable_inputs) != 1:
         return None
+
+    # Make the measurable base_var always be the first input to the MeasurableComparison node
+    base_var: TensorVariable = measurable_inputs[0][0]
+
+    # Check that the other input is not potentially measurable, in which case this rewrite
+    # would be invalid
+    const = tuple(inp for inp in node.inputs if inp is not base_var)
 
     # check for potential measurability of const
-    if not check_potential_measurability((const,), rv_map_feature):
+    if not check_potential_measurability(const, rv_map_feature):
         return None
+
+    const = const[0]
 
     # Make base_var unmeasurable
     unmeasurable_base_var = ignore_logprob(base_var)
 
-    compared_op = MeasurableComparison(node.op.scalar_op)
+    node_scalar_op = node.op.scalar_op
+
+    # Change the Op if the base_var is the second input in node.inputs. e.g. pt.lt(const, dist) -> pt.gt(dist, const)
+    if measurable_inputs[0][1] == 1:
+        if isinstance(node_scalar_op, LT):
+            node_scalar_op = GT()
+        elif isinstance(node_scalar_op, GT):
+            node_scalar_op = LT()
+        elif isinstance(node_scalar_op, GE):
+            node_scalar_op = LE()
+        elif isinstance(node_scalar_op, LE):
+            node_scalar_op = GE()
+
+    compared_op = MeasurableComparison(node_scalar_op)
     compared_rv = compared_op.make_node(unmeasurable_base_var, const).default_output()
-    compared_rv.name = compared_var.name
+    compared_rv.name = node.outputs[0].name
     return [compared_rv]
 
 
@@ -110,5 +134,59 @@ def comparison_logprob(op, values, base_rv, operand, **kwargs):
     if base_rv_op.name:
         logprob.name = f"{base_rv_op}_logprob"
         logcdf.name = f"{base_rv_op}_logcdf"
+
+    return logprob
+
+
+class MeasurableBitwise(MeasurableElemwise):
+    """A placeholder used to specify a log-likelihood for a bitwise operation RV sub-graph."""
+
+    valid_scalar_types = (Invert,)
+
+
+@node_rewriter(tracks=[invert])
+def find_measurable_bitwise(fgraph: FunctionGraph, node: Node) -> Optional[List[MeasurableBitwise]]:
+    rv_map_feature = getattr(fgraph, "preserve_rv_mappings", None)
+    if rv_map_feature is None:
+        return None  # pragma: no cover
+
+    if isinstance(node.op, MeasurableBitwise):
+        return None  # pragma: no cover
+
+    base_var = node.inputs[0]
+    if not (
+        base_var.owner
+        and isinstance(base_var.owner.op, MeasurableVariable)
+        and base_var not in rv_map_feature.rv_values
+    ):
+        return None
+
+    if not base_var.dtype.startswith("bool"):
+        raise None
+
+    # Make base_var unmeasurable
+    unmeasurable_base_var = ignore_logprob(base_var)
+
+    node_scalar_op = node.op.scalar_op
+
+    bitwise_op = MeasurableBitwise(node_scalar_op)
+    bitwise_rv = bitwise_op.make_node(unmeasurable_base_var).default_output()
+    bitwise_rv.name = node.outputs[0].name
+    return [bitwise_rv]
+
+
+measurable_ir_rewrites_db.register(
+    "find_measurable_bitwise",
+    find_measurable_bitwise,
+    "basic",
+    "bitwise",
+)
+
+
+@_logprob.register(MeasurableBitwise)
+def bitwise_not_logprob(op, values, base_rv, **kwargs):
+    (value,) = values
+
+    logprob = _logprob_helper(base_rv, invert(value), **kwargs)
 
     return logprob
