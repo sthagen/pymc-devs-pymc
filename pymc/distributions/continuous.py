@@ -1489,6 +1489,13 @@ class Laplace(Continuous):
             msg="b > 0",
         )
 
+    def icdf(value, mu, b):
+        res = pt.switch(
+            pt.le(value, 0.5), mu + b * np.log(2 * value), mu - b * np.log(2 - 2 * value)
+        )
+        res = check_icdf_value(res, value)
+        return check_icdf_parameters(res, b > 0, msg="b > 0")
+
 
 class AsymmetricLaplaceRV(RandomVariable):
     name = "asymmetriclaplace"
@@ -1933,6 +1940,16 @@ class Pareto(BoundedContinuous):
         )
 
         return check_parameters(
+            res,
+            alpha > 0,
+            m > 0,
+            msg="alpha > 0, m > 0",
+        )
+
+    def icdf(value, alpha, m):
+        res = m * pt.pow(1 - value, -1 / alpha)
+        res = check_icdf_value(res, value)
+        return check_icdf_parameters(
             res,
             alpha > 0,
             m > 0,

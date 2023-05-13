@@ -22,9 +22,11 @@ from pytensor.tensor import TensorVariable
 from pytensor.tensor.random.op import RandomVariable
 
 from pymc.distributions import transforms
-from pymc.distributions.continuous import Normal, get_tau_sigma
+from pymc.distributions.continuous import Gamma, LogNormal, Normal, get_tau_sigma
+from pymc.distributions.discrete import Binomial, NegativeBinomial, Poisson
 from pymc.distributions.dist_math import check_parameters
 from pymc.distributions.distribution import (
+    DiracDelta,
     Distribution,
     SymbolicRandomVariable,
     _moment,
@@ -32,13 +34,25 @@ from pymc.distributions.distribution import (
 )
 from pymc.distributions.shape_utils import _change_dist_size, change_dist_size
 from pymc.distributions.transforms import _default_transform
+from pymc.distributions.truncated import Truncated
 from pymc.logprob.abstract import _logcdf, _logcdf_helper, _logprob, _logprob_helper
 from pymc.logprob.transforms import IntervalTransform
 from pymc.logprob.utils import ignore_logprob
+from pymc.pytensorf import floatX
 from pymc.util import check_dist_not_registered
 from pymc.vartypes import continuous_types, discrete_types
 
-__all__ = ["Mixture", "NormalMixture"]
+__all__ = [
+    "HurdleGamma",
+    "HurdleLogNormal",
+    "HurdleNegativeBinomial",
+    "HurdlePoisson",
+    "Mixture",
+    "NormalMixture",
+    "ZeroInflatedBinomial",
+    "ZeroInflatedNegativeBinomial",
+    "ZeroInflatedPoisson",
+]
 
 
 class MarginalMixtureRV(SymbolicRandomVariable):
@@ -548,3 +562,478 @@ class NormalMixture:
         _, sigma = get_tau_sigma(tau=tau, sigma=sigma)
 
         return Mixture.dist(w, Normal.dist(mu, sigma=sigma, size=comp_shape), **kwargs)
+
+
+def _zero_inflated_mixture(*, name, nonzero_p, nonzero_dist, **kwargs):
+    """Helper function to create a zero-inflated mixture
+
+    If name is `None`, this function returns an unregistered variable
+    """
+    nonzero_p = pt.as_tensor_variable(floatX(nonzero_p))
+    weights = pt.stack([1 - nonzero_p, nonzero_p], axis=-1)
+    comp_dists = [
+        DiracDelta.dist(0),
+        nonzero_dist,
+    ]
+    if name is not None:
+        return Mixture(name, weights, comp_dists, **kwargs)
+    else:
+        return Mixture.dist(weights, comp_dists, **kwargs)
+
+
+class ZeroInflatedPoisson:
+    R"""
+    Zero-inflated Poisson log-likelihood.
+
+    Often used to model the number of events occurring in a fixed period
+    of time when the times at which events occur are independent.
+    The pmf of this distribution is
+
+    .. math::
+
+        f(x \mid \psi, \mu) = \left\{ \begin{array}{l}
+            (1-\psi) + \psi e^{-\mu}, \text{if } x = 0 \\
+            \psi \frac{e^{-\mu}\mu^x}{x!}, \text{if } x=1,2,3,\ldots
+            \end{array} \right.
+
+    .. plot::
+        :context: close-figs
+
+        import matplotlib.pyplot as plt
+        import numpy as np
+        import scipy.stats as st
+        import arviz as az
+        plt.style.use('arviz-darkgrid')
+        x = np.arange(0, 22)
+        psis = [0.7, 0.4]
+        mus = [8, 4]
+        for psi, mu in zip(psis, mus):
+            pmf = st.poisson.pmf(x, mu)
+            pmf[0] = (1 - psi) + pmf[0]
+            pmf[1:] =  psi * pmf[1:]
+            pmf /= pmf.sum()
+            plt.plot(x, pmf, '-o', label='$\\psi$ = {}, $\\mu$ = {}'.format(psi, mu))
+        plt.xlabel('x', fontsize=12)
+        plt.ylabel('f(x)', fontsize=12)
+        plt.legend(loc=1)
+        plt.show()
+    ========  ==========================
+    Support   :math:`x \in \mathbb{N}_0`
+    Mean      :math:`\psi\mu`
+    Variance  :math:`\mu + \frac{1-\psi}{\psi}\mu^2`
+    ========  ==========================
+    Parameters
+    ----------
+    psi : tensor_like of float
+        Expected proportion of Poisson variates (0 < psi < 1)
+    mu : tensor_like of float
+        Expected number of occurrences during the given interval
+        (mu >= 0).
+    """
+
+    def __new__(cls, name, psi, mu, **kwargs):
+        return _zero_inflated_mixture(
+            name=name, nonzero_p=psi, nonzero_dist=Poisson.dist(mu=mu), **kwargs
+        )
+
+    @classmethod
+    def dist(cls, psi, mu, **kwargs):
+        return _zero_inflated_mixture(
+            name=None, nonzero_p=psi, nonzero_dist=Poisson.dist(mu=mu), **kwargs
+        )
+
+
+class ZeroInflatedBinomial:
+    R"""
+    Zero-inflated Binomial log-likelihood.
+
+    The pmf of this distribution is
+
+    .. math::
+
+        f(x \mid \psi, n, p) = \left\{ \begin{array}{l}
+            (1-\psi) + \psi (1-p)^{n}, \text{if } x = 0 \\
+            \psi {n \choose x} p^x (1-p)^{n-x}, \text{if } x=1,2,3,\ldots,n
+            \end{array} \right.
+
+    .. plot::
+        :context: close-figs
+
+        import matplotlib.pyplot as plt
+        import numpy as np
+        import scipy.stats as st
+        import arviz as az
+        plt.style.use('arviz-darkgrid')
+        x = np.arange(0, 25)
+        ns = [10, 20]
+        ps = [0.5, 0.7]
+        psis = [0.7, 0.4]
+        for n, p, psi in zip(ns, ps, psis):
+            pmf = st.binom.pmf(x, n, p)
+            pmf[0] = (1 - psi) + pmf[0]
+            pmf[1:] =  psi * pmf[1:]
+            pmf /= pmf.sum()
+            plt.plot(x, pmf, '-o', label='n = {}, p = {}, $\\psi$ = {}'.format(n, p, psi))
+        plt.xlabel('x', fontsize=12)
+        plt.ylabel('f(x)', fontsize=12)
+        plt.legend(loc=1)
+        plt.show()
+    ========  ==========================
+    Support   :math:`x \in \mathbb{N}_0`
+    Mean      :math:`\psi n p`
+    Variance  :math:`(1-\psi) n p [1 - p(1 - \psi n)].`
+    ========  ==========================
+    Parameters
+    ----------
+    psi : tensor_like of float
+        Expected proportion of Binomial variates (0 < psi < 1)
+    n : tensor_like of int
+        Number of Bernoulli trials (n >= 0).
+    p : tensor_like of float
+        Probability of success in each trial (0 < p < 1).
+    """
+
+    def __new__(cls, name, psi, n, p, **kwargs):
+        return _zero_inflated_mixture(
+            name=name, nonzero_p=psi, nonzero_dist=Binomial.dist(n=n, p=p), **kwargs
+        )
+
+    @classmethod
+    def dist(cls, psi, n, p, **kwargs):
+        return _zero_inflated_mixture(
+            name=None, nonzero_p=psi, nonzero_dist=Binomial.dist(n=n, p=p), **kwargs
+        )
+
+
+class ZeroInflatedNegativeBinomial:
+    R"""
+    Zero-Inflated Negative binomial log-likelihood.
+    The Zero-inflated version of the Negative Binomial (NB).
+    The NB distribution describes a Poisson random variable
+    whose rate parameter is gamma distributed.
+    The pmf of this distribution is
+
+    .. math::
+
+       f(x \mid \psi, \mu, \alpha) = \left\{
+         \begin{array}{l}
+           (1-\psi) + \psi \left (
+             \frac{\alpha}{\alpha+\mu}
+           \right) ^\alpha, \text{if } x = 0 \\
+           \psi \frac{\Gamma(x+\alpha)}{x! \Gamma(\alpha)} \left (
+             \frac{\alpha}{\mu+\alpha}
+           \right)^\alpha \left(
+             \frac{\mu}{\mu+\alpha}
+           \right)^x, \text{if } x=1,2,3,\ldots
+         \end{array}
+       \right.
+
+    .. plot::
+        :context: close-figs
+
+        import matplotlib.pyplot as plt
+        import numpy as np
+        import scipy.stats as st
+        from scipy import special
+        import arviz as az
+        plt.style.use('arviz-darkgrid')
+        def ZeroInfNegBinom(a, m, psi, x):
+            pmf = special.binom(x + a - 1, x) * (a / (m + a))**a * (m / (m + a))**x
+            pmf[0] = (1 - psi) + pmf[0]
+            pmf[1:] =  psi * pmf[1:]
+            pmf /= pmf.sum()
+            return pmf
+        x = np.arange(0, 25)
+        alphas = [2, 4]
+        mus = [2, 8]
+        psis = [0.7, 0.7]
+        for a, m, psi in zip(alphas, mus, psis):
+            pmf = ZeroInfNegBinom(a, m, psi, x)
+            plt.plot(x, pmf, '-o', label=r'$\alpha$ = {}, $\mu$ = {}, $\psi$ = {}'.format(a, m, psi))
+        plt.xlabel('x', fontsize=12)
+        plt.ylabel('f(x)', fontsize=12)
+        plt.legend(loc=1)
+        plt.show()
+    ========  ==========================
+    Support   :math:`x \in \mathbb{N}_0`
+    Mean      :math:`\psi\mu`
+    Var       :math:`\psi\mu +  \left (1 + \frac{\mu}{\alpha} + \frac{1-\psi}{\mu} \right)`
+    ========  ==========================
+
+    The zero inflated negative binomial distribution can be parametrized
+    either in terms of mu or p, and either in terms of alpha or n.
+    The link between the parametrizations is given by
+
+    .. math::
+
+        \mu &= \frac{n(1-p)}{p} \\
+        \alpha &= n
+
+    Parameters
+    ----------
+    psi : tensor_like of float
+        Expected proportion of NegativeBinomial variates (0 < psi < 1)
+    mu : tensor_like of float
+        Poisson distribution parameter (mu > 0).
+    alpha : tensor_like of float
+        Gamma distribution parameter (alpha > 0).
+    p : tensor_like of float
+        Alternative probability of success in each trial (0 < p < 1).
+    n : tensor_like of float
+        Alternative number of target success trials (n > 0)
+    """
+
+    def __new__(cls, name, psi, mu=None, alpha=None, p=None, n=None, **kwargs):
+        return _zero_inflated_mixture(
+            name=name,
+            nonzero_p=psi,
+            nonzero_dist=NegativeBinomial.dist(mu=mu, alpha=alpha, p=p, n=n),
+            **kwargs,
+        )
+
+    @classmethod
+    def dist(cls, psi, mu=None, alpha=None, p=None, n=None, **kwargs):
+        return _zero_inflated_mixture(
+            name=None,
+            nonzero_p=psi,
+            nonzero_dist=NegativeBinomial.dist(mu=mu, alpha=alpha, p=p, n=n),
+            **kwargs,
+        )
+
+
+def _hurdle_mixture(*, name, nonzero_p, nonzero_dist, dtype, **kwargs):
+    """Helper function to create a hurdle mixtures
+
+    If name is `None`, this function returns an unregistered variable
+
+    In hurdle models, the zeros come from a completely different process than the rest of the data.
+    In other words, the zeros are not inflated, they come from a different process.
+    """
+    if dtype == "float":
+        zero = 0.0
+        lower = np.finfo(pytensor.config.floatX).eps
+    elif dtype == "int":
+        zero = 0
+        lower = 1
+    else:
+        raise ValueError("dtype must be 'float' or 'int'")
+
+    nonzero_p = pt.as_tensor_variable(floatX(nonzero_p))
+    weights = pt.stack([1 - nonzero_p, nonzero_p], axis=-1)
+    comp_dists = [
+        DiracDelta.dist(zero),
+        Truncated.dist(nonzero_dist, lower=lower),
+    ]
+
+    if name is not None:
+        return Mixture(name, weights, comp_dists, **kwargs)
+    else:
+        return Mixture.dist(weights, comp_dists, **kwargs)
+
+
+class HurdlePoisson:
+    R"""
+    Hurdle Poisson log-likelihood.
+
+    The Poisson distribution is often used to model the number of events occurring
+    in a fixed period of time or space when the times or locations
+    at which events occur are independent.
+
+    The difference with ZeroInflatedPoisson is that the zeros are not inflated,
+    they come from a completely independent process.
+
+    The pmf of this distribution is
+
+    .. math::
+
+        f(x \mid \psi, \mu) =
+            \left\{
+                \begin{array}{l}
+                (1 - \psi)  \ \text{if } x = 0 \\
+                \psi
+                \frac{\text{PoissonPDF}(x \mid \mu))}
+                {1 - \text{PoissonCDF}(0 \mid \mu)} \ \text{if } x=1,2,3,\ldots
+                \end{array}
+            \right.
+
+
+    Parameters
+    ----------
+    psi : tensor_like of float
+        Expected proportion of Poisson variates (0 < psi < 1)
+    mu : tensor_like of float
+        Expected number of occurrences (mu >= 0).
+    """
+
+    def __new__(cls, name, psi, mu, **kwargs):
+        return _hurdle_mixture(
+            name=name, nonzero_p=psi, nonzero_dist=Poisson.dist(mu=mu), dtype="int", **kwargs
+        )
+
+    @classmethod
+    def dist(cls, psi, mu, **kwargs):
+        return _hurdle_mixture(
+            name=None, nonzero_p=psi, nonzero_dist=Poisson.dist(mu=mu), dtype="int", **kwargs
+        )
+
+
+class HurdleNegativeBinomial:
+    R"""
+    Hurdle Negative Binomial log-likelihood.
+
+    The negative binomial distribution describes a Poisson random variable
+    whose rate parameter is gamma distributed.
+
+    The difference with ZeroInflatedNegativeBinomial is that the zeros are not inflated,
+    they come from a completely independent process.
+
+    The pmf of this distribution is
+
+    .. math::
+
+        f(x \mid \psi, \mu, \alpha) =
+            \left\{
+                \begin{array}{l}
+                (1 - \psi)  \ \text{if } x = 0 \\
+                \psi
+                \frac{\text{NegativeBinomialPDF}(x \mid \mu, \alpha))}
+                {1 - \text{NegativeBinomialCDF}(0 \mid \mu, \alpha)} \ \text{if } x=1,2,3,\ldots
+                \end{array}
+            \right.
+
+    Parameters
+    ----------
+    psi : tensor_like of float
+        Expected proportion of Negative Binomial variates (0 < psi < 1)
+    alpha : tensor_like of float
+        Gamma distribution shape parameter (alpha > 0).
+    mu : tensor_like of float
+        Gamma distribution mean (mu > 0).
+    p : tensor_like of float
+        Alternative probability of success in each trial (0 < p < 1).
+    n : tensor_like of float
+        Alternative number of target success trials (n > 0)
+    """
+
+    def __new__(cls, name, psi, mu=None, alpha=None, p=None, n=None, **kwargs):
+        return _hurdle_mixture(
+            name=name,
+            nonzero_p=psi,
+            nonzero_dist=NegativeBinomial.dist(mu=mu, alpha=alpha, p=p, n=n),
+            dtype="int",
+            **kwargs,
+        )
+
+    @classmethod
+    def dist(cls, psi, mu=None, alpha=None, p=None, n=None, **kwargs):
+        return _hurdle_mixture(
+            name=None,
+            nonzero_p=psi,
+            nonzero_dist=NegativeBinomial.dist(mu=mu, alpha=alpha, p=p, n=n),
+            dtype="int",
+            **kwargs,
+        )
+
+
+class HurdleGamma:
+    R"""
+    Hurdle Gamma log-likelihood.
+
+    .. math::
+
+        f(x \mid \psi, \alpha, \beta) =
+            \left\{
+                \begin{array}{l}
+                (1 - \psi)  \ \text{if } x = 0 \\
+                \psi
+                \frac{\text{GammaPDF}(x \mid \alpha, \beta))}
+                {1 - \text{GammaCDF}(\epsilon \mid \alpha, \beta)} \ \text{if } x=1,2,3,\ldots
+                \end{array}
+            \right.
+
+    where :math:`\epsilon` is the machine precision.
+
+    Parameters
+    ----------
+    psi : tensor_like of float
+        Expected proportion of Gamma variates (0 < psi < 1)
+    alpha : tensor_like of float, optional
+        Shape parameter (alpha > 0).
+    beta : tensor_like of float, optional
+        Rate parameter (beta > 0).
+    mu : tensor_like of float, optional
+        Alternative shape parameter (mu > 0).
+    sigma : tensor_like of float, optional
+        Alternative scale parameter (sigma > 0).
+    """
+
+    def __new__(cls, name, psi, alpha=None, beta=None, mu=None, sigma=None, **kwargs):
+        return _hurdle_mixture(
+            name=name,
+            nonzero_p=psi,
+            nonzero_dist=Gamma.dist(alpha=alpha, beta=beta, mu=mu, sigma=sigma),
+            dtype="float",
+            **kwargs,
+        )
+
+    @classmethod
+    def dist(cls, psi, alpha=None, beta=None, mu=None, sigma=None, **kwargs):
+        return _hurdle_mixture(
+            name=None,
+            nonzero_p=psi,
+            nonzero_dist=Gamma.dist(alpha=alpha, beta=beta, mu=mu, sigma=sigma),
+            dtype="float",
+            **kwargs,
+        )
+
+
+class HurdleLogNormal:
+    R"""
+    Hurdle LogNormal log-likelihood.
+
+    .. math::
+
+        f(x \mid \psi, \mu, \sigma) =
+            \left\{
+                \begin{array}{l}
+                (1 - \psi)  \ \text{if } x = 0 \\
+                \psi
+                \frac{\text{LogNormalPDF}(x \mid \mu, \sigma))}
+                {1 - \text{LogNormalCDF}(\epsilon \mid \mu, \sigma)} \ \text{if } x=1,2,3,\ldots
+                \end{array}
+            \right.
+
+    where :math:`\epsilon` is the machine precision.
+
+    Parameters
+    ----------
+    psi : tensor_like of float
+        Expected proportion of Gamma variates (0 < psi < 1)
+    mu : tensor_like of float, default 0
+        Location parameter.
+    sigma : tensor_like of float, optional
+        Standard deviation. (sigma > 0). (only required if tau is not specified).
+        Defaults to 1.
+    tau : tensor_like of float, optional
+        Scale parameter (tau > 0). (only required if sigma is not specified).
+        Defaults to 1.
+    """
+
+    def __new__(cls, name, psi, mu=0, sigma=None, tau=None, **kwargs):
+        return _hurdle_mixture(
+            name=name,
+            nonzero_p=psi,
+            nonzero_dist=LogNormal.dist(mu=mu, sigma=sigma, tau=tau),
+            dtype="float",
+            **kwargs,
+        )
+
+    @classmethod
+    def dist(cls, psi, mu=0, sigma=None, tau=None, **kwargs):
+        return _hurdle_mixture(
+            name=None,
+            nonzero_p=psi,
+            nonzero_dist=LogNormal.dist(mu=mu, sigma=sigma, tau=tau),
+            dtype="float",
+            **kwargs,
+        )

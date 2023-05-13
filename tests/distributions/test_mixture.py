@@ -29,23 +29,33 @@ from scipy.special import logsumexp
 
 from pymc.distributions import (
     Categorical,
+    DiracDelta,
     Dirichlet,
     DirichletMultinomial,
     Exponential,
     Gamma,
     HalfNormal,
     HalfStudentT,
+    HurdleGamma,
+    HurdleLogNormal,
+    HurdleNegativeBinomial,
+    HurdlePoisson,
     LKJCholeskyCov,
     LogNormal,
     Mixture,
     Multinomial,
     MvNormal,
+    NegativeBinomial,
     Normal,
     NormalMixture,
     Poisson,
     StickBreakingWeights,
     Triangular,
+    Truncated,
     Uniform,
+    ZeroInflatedBinomial,
+    ZeroInflatedNegativeBinomial,
+    ZeroInflatedPoisson,
 )
 from pymc.distributions.mixture import MixtureTransformWarning
 from pymc.distributions.shape_utils import change_dist_size, to_tuple
@@ -64,11 +74,21 @@ from pymc.sampling.mcmc import sample
 from pymc.step_methods import Metropolis
 from pymc.testing import (
     Domain,
+    Nat,
+    NatSmall,
+    R,
+    Rplus,
+    Rplusbig,
     SeededTest,
     Simplex,
+    Unit,
     assert_moment_is_expected,
+    check_logcdf,
+    check_logp,
+    check_selfconsistency_discrete_logcdf,
     continuous_random_tester,
 )
+from pymc.vartypes import discrete_types
 
 
 def generate_normal_mixture_data(w, mu, sigma, size=1000):
@@ -1363,3 +1383,344 @@ class TestMixtureDefaultTransforms:
             with warnings.catch_warnings():
                 warnings.simplefilter("error")
                 Mixture("mix6", w=[0.5, 0.5], comp_dists=comp_dists)
+
+
+class TestZeroInflatedMixture:
+    def test_zeroinflatedpoisson_logp(self):
+        def logp_fn(value, psi, mu):
+            if value == 0:
+                return np.log((1 - psi) * st.poisson.pmf(0, mu))
+            else:
+                return np.log(psi * st.poisson.pmf(value, mu))
+
+        def logcdf_fn(value, psi, mu):
+            return np.log((1 - psi) + psi * st.poisson.cdf(value, mu))
+
+        check_logp(
+            ZeroInflatedPoisson,
+            Nat,
+            {"psi": Unit, "mu": Rplus},
+            logp_fn,
+        )
+
+        check_logcdf(
+            ZeroInflatedPoisson,
+            Nat,
+            {"psi": Unit, "mu": Rplus},
+            logcdf_fn,
+        )
+
+        check_selfconsistency_discrete_logcdf(
+            ZeroInflatedPoisson,
+            Nat,
+            {"mu": Rplus, "psi": Unit},
+        )
+
+    def test_zeroinflatednegativebinomial_logp(self):
+        def logp_fn(value, psi, mu, alpha):
+            n, p = NegativeBinomial.get_n_p(mu=mu, alpha=alpha)
+            if value == 0:
+                return np.log((1 - psi) * st.nbinom.pmf(0, n, p))
+            else:
+                return np.log(psi * st.nbinom.pmf(value, n, p))
+
+        def logcdf_fn(value, psi, mu, alpha):
+            n, p = NegativeBinomial.get_n_p(mu=mu, alpha=alpha)
+            return np.log((1 - psi) + psi * st.nbinom.cdf(value, n, p))
+
+        check_logp(
+            ZeroInflatedNegativeBinomial,
+            Nat,
+            {"psi": Unit, "mu": Rplusbig, "alpha": Rplusbig},
+            logp_fn,
+        )
+
+        check_logp(
+            ZeroInflatedNegativeBinomial,
+            Nat,
+            {"psi": Unit, "p": Unit, "n": NatSmall},
+            lambda value, psi, p, n: np.log((1 - psi) * st.nbinom.pmf(0, n, p))
+            if value == 0
+            else np.log(psi * st.nbinom.pmf(value, n, p)),
+        )
+
+        check_logcdf(
+            ZeroInflatedNegativeBinomial,
+            Nat,
+            {"psi": Unit, "mu": Rplusbig, "alpha": Rplusbig},
+            logcdf_fn,
+        )
+
+        check_logcdf(
+            ZeroInflatedNegativeBinomial,
+            Nat,
+            {"psi": Unit, "p": Unit, "n": NatSmall},
+            lambda value, psi, p, n: np.log((1 - psi) + psi * st.nbinom.cdf(value, n, p)),
+        )
+
+        check_selfconsistency_discrete_logcdf(
+            ZeroInflatedNegativeBinomial,
+            Nat,
+            {"psi": Unit, "mu": Rplusbig, "alpha": Rplusbig},
+        )
+
+    def test_zeroinflatedbinomial_logp(self):
+        def logp_fn(value, psi, n, p):
+            if value == 0:
+                return np.log((1 - psi) * st.binom.pmf(0, n, p))
+            else:
+                return np.log(psi * st.binom.pmf(value, n, p))
+
+        def logcdf_fn(value, psi, n, p):
+            return np.log((1 - psi) + psi * st.binom.cdf(value, n, p))
+
+        check_logp(
+            ZeroInflatedBinomial,
+            Nat,
+            {"psi": Unit, "n": NatSmall, "p": Unit},
+            logp_fn,
+        )
+
+        check_logcdf(
+            ZeroInflatedBinomial,
+            Nat,
+            {"psi": Unit, "n": NatSmall, "p": Unit},
+            logcdf_fn,
+        )
+
+        check_selfconsistency_discrete_logcdf(
+            ZeroInflatedBinomial,
+            Nat,
+            {"n": NatSmall, "p": Unit, "psi": Unit},
+        )
+
+    @pytest.mark.parametrize(
+        "psi, mu, size, expected",
+        [
+            (0.9, 3.0, None, 3),
+            (0.8, 2.9, 5, np.full(5, 2)),
+            (0.2, np.arange(1, 5) * 5, None, np.arange(1, 5)),
+            (0.2, np.arange(1, 5) * 5, (2, 4), np.full((2, 4), np.arange(1, 5))),
+        ],
+    )
+    def test_zero_inflated_poisson_moment(self, psi, mu, size, expected):
+        with Model() as model:
+            ZeroInflatedPoisson("x", psi=psi, mu=mu, size=size)
+        assert_moment_is_expected(model, expected)
+
+    @pytest.mark.parametrize(
+        "psi, n, p, size, expected",
+        [
+            (0.8, 7, 0.7, None, 4),
+            (0.8, 7, 0.3, 5, np.full(5, 2)),
+            (0.4, 25, np.arange(1, 6) / 10, None, np.arange(1, 6)),
+            (
+                0.4,
+                25,
+                np.arange(1, 6) / 10,
+                (2, 5),
+                np.full((2, 5), np.arange(1, 6)),
+            ),
+        ],
+    )
+    def test_zero_inflated_binomial_moment(self, psi, n, p, size, expected):
+        with Model() as model:
+            ZeroInflatedBinomial("x", psi=psi, n=n, p=p, size=size)
+        assert_moment_is_expected(model, expected)
+
+    @pytest.mark.parametrize(
+        "psi, mu, alpha, size, expected",
+        [
+            (0.2, 10, 3, None, 2),
+            (0.2, 10, 4, 5, np.full(5, 2)),
+            (
+                0.4,
+                np.arange(1, 5),
+                np.arange(2, 6),
+                None,
+                np.array([0, 1, 1, 2] if pytensor.config.floatX == "float64" else [0, 0, 1, 1]),
+            ),
+            (
+                np.linspace(0.2, 0.6, 3),
+                np.arange(1, 10, 4),
+                np.arange(1, 4),
+                (2, 3),
+                np.full((2, 3), np.array([0, 2, 5])),
+            ),
+        ],
+    )
+    def test_zero_inflated_negative_binomial_moment(self, psi, mu, alpha, size, expected):
+        with Model() as model:
+            ZeroInflatedNegativeBinomial("x", psi=psi, mu=mu, alpha=alpha, size=size)
+        assert_moment_is_expected(model, expected)
+
+    @pytest.mark.parametrize(
+        "dist, non_psi_args",
+        [
+            (ZeroInflatedPoisson.dist, (2,)),
+            (ZeroInflatedBinomial.dist, (2, 0.5)),
+            (ZeroInflatedNegativeBinomial.dist, (2, 2)),
+        ],
+    )
+    def test_zero_inflated_dists_dtype_and_broadcast(self, dist, non_psi_args):
+        x = dist([0.5, 0.5, 0.5], *non_psi_args)
+        assert x.dtype in discrete_types
+        assert x.eval().shape == (3,)
+
+
+class TestHurdleMixtures:
+    @staticmethod
+    def check_hurdle_mixture_graph(dist):
+        # Assert it's a mixture
+        assert isinstance(dist.owner.op, Mixture)
+
+        # Extract the distribution for zeroes and nonzeroes
+        zero_dist, nonzero_dist = dist.owner.inputs[-2:]
+
+        # Assert ops are of the right type
+        assert isinstance(zero_dist.owner.op, DiracDelta)
+        assert isinstance(nonzero_dist.owner.op, Truncated)
+
+        return zero_dist, nonzero_dist
+
+    def test_hurdle_poisson_graph(self):
+        # There's nothing special in these values
+        psi, mu = 0.3, 4
+        dist = HurdlePoisson.dist(psi=psi, mu=mu)
+        _, nonzero_dist = self.check_hurdle_mixture_graph(dist)
+
+        # Assert the truncated distribution is of the right type
+        assert isinstance(nonzero_dist.owner.op.base_rv_op, Poisson)
+
+        # Assert the mean of the Poisson distribution matches the specified value
+        assert nonzero_dist.owner.inputs[2].data == mu
+
+    def test_hurdle_negativebinomial_graph(self):
+        psi, p, n = 0.2, 0.6, 10
+        dist = HurdleNegativeBinomial.dist(psi=psi, p=p, n=n)
+        _, nonzero_dist = self.check_hurdle_mixture_graph(dist)
+
+        assert isinstance(nonzero_dist.owner.op.base_rv_op, NegativeBinomial)
+        assert nonzero_dist.owner.inputs[2].data == n
+        assert nonzero_dist.owner.inputs[3].data == p
+
+    def test_hurdle_gamma_graph(self):
+        psi, alpha, beta = 0.25, 3, 4
+        dist = HurdleGamma.dist(psi=psi, alpha=alpha, beta=beta)
+        _, nonzero_dist = self.check_hurdle_mixture_graph(dist)
+
+        # Under the hood it uses the shape-scale parametrization of the Gamma distribution.
+        # So the second value is the reciprocal of the rate (i.e. 1 / beta)
+        assert isinstance(nonzero_dist.owner.op.base_rv_op, Gamma)
+        assert nonzero_dist.owner.inputs[2].data == alpha
+        assert nonzero_dist.owner.inputs[3].eval() == 1 / beta
+
+    def test_hurdle_lognormal_graph(self):
+        psi, mu, sigma = 0.1, 2, 2.5
+        dist = HurdleLogNormal.dist(psi=psi, mu=mu, sigma=sigma)
+        _, nonzero_dist = self.check_hurdle_mixture_graph(dist)
+
+        assert isinstance(nonzero_dist.owner.op.base_rv_op, LogNormal)
+        assert nonzero_dist.owner.inputs[2].data == mu
+        assert nonzero_dist.owner.inputs[3].data == sigma
+
+    @pytest.mark.parametrize(
+        "dist, psi, non_psi_args",
+        [
+            (HurdlePoisson.dist, 0.1, {"mu": 1}),
+            (HurdlePoisson.dist, 0.2, {"mu": 1}),
+            (HurdlePoisson.dist, 0.3, {"mu": 5}),
+            (HurdlePoisson.dist, 0.8, {"mu": 3}),
+            (HurdleNegativeBinomial.dist, 0.15, {"mu": 1, "alpha": 2}),
+            (HurdleNegativeBinomial.dist, 0.25, {"mu": 2, "alpha": 3}),
+            (HurdleNegativeBinomial.dist, 0.5, {"mu": 5, "alpha": 5}),
+            (HurdleNegativeBinomial.dist, 0.7, {"mu": 4, "alpha": 1.5}),
+            (HurdleGamma.dist, 0.05, {"alpha": 1, "beta": 2}),
+            (HurdleGamma.dist, 0.3, {"alpha": 5, "beta": 9}),
+            (HurdleGamma.dist, 0.4, {"alpha": 3, "beta": 6}),
+            (HurdleGamma.dist, 0.9, {"alpha": 4, "beta": 4}),
+            (HurdleLogNormal.dist, 0.2, {"mu": 0, "sigma": 1}),
+            (HurdleLogNormal.dist, 0.4, {"mu": 2, "sigma": 1.5}),
+            (HurdleLogNormal.dist, 0.6, {"mu": 5, "sigma": 2}),
+            (HurdleLogNormal.dist, 0.8, {"mu": 4, "sigma": 0.5}),
+        ],
+    )
+    def test_hurdle_logp_at_zero(self, dist, psi, non_psi_args):
+        assert logp(dist(psi=psi, **non_psi_args), 0).eval() == np.log(1 - psi)
+
+    @pytest.mark.parametrize(
+        "dist, psi, non_psi_args",
+        [
+            (HurdlePoisson.dist, 0.1, {"mu": 1}),
+            (HurdlePoisson.dist, 0.2, {"mu": 1}),
+            (HurdlePoisson.dist, 0.3, {"mu": 5}),
+            (HurdlePoisson.dist, 0.8, {"mu": 3}),
+            (HurdleNegativeBinomial.dist, 0.15, {"mu": 1, "alpha": 2}),
+            (HurdleNegativeBinomial.dist, 0.25, {"mu": 2, "alpha": 3}),
+            (HurdleNegativeBinomial.dist, 0.5, {"mu": 5, "alpha": 5}),
+            (HurdleNegativeBinomial.dist, 0.7, {"mu": 4, "alpha": 1.5}),
+            (HurdleGamma.dist, 0.05, {"alpha": 1, "beta": 2}),
+            (HurdleGamma.dist, 0.3, {"alpha": 5, "beta": 9}),
+            (HurdleGamma.dist, 0.4, {"alpha": 3, "beta": 6}),
+            (HurdleGamma.dist, 0.9, {"alpha": 4, "beta": 4}),
+            (HurdleLogNormal.dist, 0.2, {"mu": 0, "sigma": 1}),
+            (HurdleLogNormal.dist, 0.4, {"mu": 2, "sigma": 1.5}),
+            (HurdleLogNormal.dist, 0.6, {"mu": 5, "sigma": 2}),
+            (HurdleLogNormal.dist, 0.8, {"mu": 4, "sigma": 0.5}),
+        ],
+    )
+    def test_hurdle_zero_draws(self, dist, psi, non_psi_args):
+        n = 10000
+        tol = 0.025
+        draws = draw(dist(psi=psi, **non_psi_args), n, random_seed=1234)
+        p_zeros = sum(draws == 0) / n
+        assert (1 - psi) - tol < p_zeros < (1 - psi) + tol
+
+    def test_hurdle_poisson_logp(self):
+        def logp_fn(value, psi, mu):
+            if value == 0:
+                return np.log(1 - psi)
+            else:
+                return (
+                    np.log(psi) + st.poisson.logpmf(value, mu) - np.log(1 - st.poisson.cdf(0, mu))
+                )
+
+        check_logp(HurdlePoisson, Nat, {"psi": Unit, "mu": Rplus}, logp_fn)
+
+    def test_hurdle_negativebinomial_logp(self):
+        def logp_fn(value, psi, mu, alpha):
+            n, p = NegativeBinomial.get_n_p(mu=mu, alpha=alpha)
+            if value == 0:
+                return np.log(1 - psi)
+            else:
+                return (
+                    np.log(psi) + st.nbinom.logpmf(value, n, p) - np.log(1 - st.nbinom.cdf(0, n, p))
+                )
+
+        check_logp(HurdleNegativeBinomial, Nat, {"psi": Unit, "mu": Rplus, "alpha": Rplus}, logp_fn)
+
+    def test_hurdle_gamma_logp(self):
+        def logp_fn(value, psi, alpha, beta):
+            if value == 0:
+                return np.log(1 - psi)
+            else:
+                return (
+                    np.log(psi)
+                    + st.gamma.logpdf(value, alpha, scale=1.0 / beta)
+                    - np.log(1 - st.gamma.cdf(np.finfo(float).eps, alpha, scale=1.0 / beta))
+                )
+
+        check_logp(HurdleGamma, Rplus, {"psi": Unit, "alpha": Rplusbig, "beta": Rplusbig}, logp_fn)
+
+    def test_hurdle_lognormal_logp(self):
+        def logp_fn(value, psi, mu, sigma):
+            if value == 0:
+                return np.log(1 - psi)
+            else:
+                return (
+                    np.log(psi)
+                    + st.lognorm.logpdf(value, sigma, 0, np.exp(mu))
+                    - np.log(1 - st.lognorm.cdf(np.finfo(float).eps, sigma, 0, np.exp(mu)))
+                )
+
+        check_logp(HurdleLogNormal, Rplus, {"psi": Unit, "mu": R, "sigma": Rplusbig}, logp_fn)
