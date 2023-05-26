@@ -36,6 +36,7 @@ from pytensor.tensor.var import TensorConstant, TensorVariable
 
 import pymc as pm
 
+from pymc.logprob.abstract import _get_measurable_outputs
 from pymc.pytensorf import convert_observed_data
 
 __all__ = [
@@ -134,6 +135,11 @@ class MinibatchIndexRV(IntegersRV):
         return super().make_node(rng, *args, **kwargs)
 
 
+@_get_measurable_outputs.register(MinibatchIndexRV)
+def minibatch_index_rv_measuarable_outputs(op, node):
+    return []
+
+
 minibatch_index = MinibatchIndexRV()
 
 
@@ -164,13 +170,11 @@ def assert_all_scalars_equal(scalar, *scalars):
     else:
         return Assert(
             "All variables shape[0] in Minibatch should be equal, check your Minibatch(data1, data2, ...) code"
-        )(scalar, pt.all([scalar == s for s in scalars]))
+        )(scalar, pt.all([pt.eq(scalar, s) for s in scalars]))
 
 
 def Minibatch(variable: TensorVariable, *variables: TensorVariable, batch_size: int):
-    """
-    Get random slices from variables from the leading dimension.
-
+    """Get random slices from variables from the leading dimension.
 
     Parameters
     ----------
@@ -184,6 +188,9 @@ def Minibatch(variable: TensorVariable, *variables: TensorVariable, batch_size: 
     >>> data2 = np.random.randn(100, 20)
     >>> mdata1, mdata2 = Minibatch(data1, data2, batch_size=10)
     """
+
+    if not isinstance(batch_size, int):
+        raise TypeError("batch_size must be an integer")
 
     tensor, *tensors = tuple(map(pt.as_tensor, (variable, *variables)))
     upper = assert_all_scalars_equal(*[t.shape[0] for t in (tensor, *tensors)])
