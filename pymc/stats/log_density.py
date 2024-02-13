@@ -24,7 +24,7 @@ from pymc.model import Model, modelcontext
 from pymc.pytensorf import PointFunc
 from pymc.util import dataset_to_point_list
 
-__all__ = ("compute_log_likelihood",)
+__all__ = ("compute_log_likelihood", "compute_log_prior")
 
 
 def compute_log_likelihood(
@@ -43,7 +43,8 @@ def compute_log_likelihood(
     idata : InferenceData
         InferenceData with posterior group
     var_names : sequence of str, optional
-        List of Observed variable names for which to compute log_likelihood. Defaults to all observed variables
+        List of Observed variable names for which to compute log_likelihood.
+        Defaults to all observed variables.
     extend_inferencedata : bool, default True
         Whether to extend the original InferenceData or return a new one
     model : Model, optional
@@ -54,20 +55,92 @@ def compute_log_likelihood(
     -------
     idata : InferenceData
         InferenceData with log_likelihood group
+    """
+    return compute_log_density(
+        idata=idata,
+        var_names=var_names,
+        extend_inferencedata=extend_inferencedata,
+        model=model,
+        kind="likelihood",
+        sample_dims=sample_dims,
+        progressbar=progressbar,
+    )
 
+
+def compute_log_prior(
+    idata: InferenceData,
+    var_names: Optional[Sequence[str]] = None,
+    extend_inferencedata: bool = True,
+    model: Optional[Model] = None,
+    sample_dims: Sequence[str] = ("chain", "draw"),
+    progressbar=True,
+):
+    """Compute elemwise log_prior of model given InferenceData with posterior group
+
+    Parameters
+    ----------
+    idata : InferenceData
+        InferenceData with posterior group
+    var_names : sequence of str, optional
+        List of Observed variable names for which to compute log_prior.
+        Defaults to all all free variables.
+    extend_inferencedata : bool, default True
+        Whether to extend the original InferenceData or return a new one
+    model : Model, optional
+    sample_dims : sequence of str, default ("chain", "draw")
+    progressbar : bool, default True
+
+    Returns
+    -------
+    idata : InferenceData
+        InferenceData with log_prior group
+    """
+    return compute_log_density(
+        idata=idata,
+        var_names=var_names,
+        extend_inferencedata=extend_inferencedata,
+        model=model,
+        kind="prior",
+        sample_dims=sample_dims,
+        progressbar=progressbar,
+    )
+
+
+def compute_log_density(
+    idata: InferenceData,
+    *,
+    var_names: Optional[Sequence[str]] = None,
+    extend_inferencedata: bool = True,
+    model: Optional[Model] = None,
+    kind="likelihood",
+    sample_dims: Sequence[str] = ("chain", "draw"),
+    progressbar=True,
+):
+    """
+    Compute elemwise log_likelihood or log_prior of model given InferenceData with posterior group
     """
 
     posterior = idata["posterior"]
 
     model = modelcontext(model)
 
-    if var_names is None:
-        observed_vars = model.observed_RVs
-        var_names = tuple(rv.name for rv in observed_vars)
+    if kind not in ("likelihood", "prior"):
+        raise ValueError("kind must be either 'likelihood' or 'prior'")
+
+    if kind == "likelihood":
+        target_rvs = model.observed_RVs
+        target_str = "observed_RVs"
     else:
-        observed_vars = [model.named_vars[name] for name in var_names]
-        if not set(observed_vars).issubset(model.observed_RVs):
-            raise ValueError(f"var_names must refer to observed_RVs in the model. Got: {var_names}")
+        target_rvs = model.unobserved_RVs
+        target_str = "free_RVs"
+
+    if var_names is None:
+        vars = target_rvs
+        var_names = tuple(rv.name for rv in vars)
+    else:
+        vars = [model.named_vars[name] for name in var_names]
+        if not set(vars).issubset(target_rvs):
+            raise ValueError(f"var_names must refer to {target_str} in the model. Got: {var_names}")
 
     # We need to temporarily disable transforms, because the InferenceData only keeps the untransformed values
     try:
@@ -80,12 +153,12 @@ def compute_log_likelihood(
         }
         model.rvs_to_transforms = {rv: None for rv in model.basic_RVs}
 
-        elemwise_loglike_fn = model.compile_fn(
+        elemwise_logdens_fn = model.compile_fn(
             inputs=model.value_vars,
-            outs=model.logp(vars=observed_vars, sum=False),
+            outs=model.logp(vars=vars, sum=False),
             on_unused_input="ignore",
         )
-        elemwise_loglike_fn = cast(PointFunc, elemwise_loglike_fn)
+        elemwise_logdens_fn = cast(PointFunc, elemwise_logdens_fn)
     finally:
         model.rvs_to_values = original_rvs_to_values
         model.rvs_to_transforms = original_rvs_to_transforms
@@ -93,26 +166,27 @@ def compute_log_likelihood(
     # Ignore Deterministics
     posterior_values = posterior[[rv.name for rv in model.free_RVs]]
     posterior_pts, stacked_dims = dataset_to_point_list(posterior_values, sample_dims)
+
     n_pts = len(posterior_pts)
-    loglike_dict = _DefaultTrace(n_pts)
+    logdens_dict = _DefaultTrace(n_pts)
     indices = range(n_pts)
     if progressbar:
         indices = progress_bar(indices, total=n_pts, display=progressbar)
 
     for idx in indices:
-        loglikes_pts = elemwise_loglike_fn(posterior_pts[idx])
-        for rv_name, rv_loglike in zip(var_names, loglikes_pts):
-            loglike_dict.insert(rv_name, rv_loglike, idx)
+        logdenss_pts = elemwise_logdens_fn(posterior_pts[idx])
+        for rv_name, rv_logdens in zip(var_names, logdenss_pts):
+            logdens_dict.insert(rv_name, rv_logdens, idx)
 
-    loglike_trace = loglike_dict.trace_dict
-    for key, array in loglike_trace.items():
-        loglike_trace[key] = array.reshape(
+    logdens_trace = logdens_dict.trace_dict
+    for key, array in logdens_trace.items():
+        logdens_trace[key] = array.reshape(
             (*[len(coord) for coord in stacked_dims.values()], *array.shape[1:])
         )
 
     coords, dims = coords_and_dims_for_inferencedata(model)
-    loglike_dataset = dict_to_dataset(
-        loglike_trace,
+    logdens_dataset = dict_to_dataset(
+        logdens_trace,
         library=pymc,
         dims=dims,
         coords=coords,
@@ -121,7 +195,7 @@ def compute_log_likelihood(
     )
 
     if extend_inferencedata:
-        idata.add_groups(dict(log_likelihood=loglike_dataset))
+        idata.add_groups({f"log_{kind}": logdens_dataset})
         return idata
     else:
-        return loglike_dataset
+        return logdens_dataset
