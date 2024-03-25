@@ -33,7 +33,7 @@ from pytensor.graph.op import Op
 from pytensor.raise_op import Assert
 from pytensor.tensor import gammaln
 from pytensor.tensor.extra_ops import broadcast_shape
-from pytensor.tensor.math import tanh
+from pytensor.tensor.math import betaincinv, gammaincinv, tanh
 from pytensor.tensor.random.basic import (
     BetaRV,
     _gamma,
@@ -1227,6 +1227,16 @@ class Beta(UnitContinuous):
             msg="alpha > 0, beta > 0",
         )
 
+    def icdf(value, alpha, beta):
+        res = betaincinv(alpha, beta, value)
+        res = check_icdf_value(res, value)
+        return check_icdf_parameters(
+            res,
+            alpha > 0,
+            beta > 0,
+            msg="alpha > 0, beta > 0",
+        )
+
 
 class KumaraswamyRV(RandomVariable):
     name = "kumaraswamy"
@@ -1872,6 +1882,21 @@ class StudentT(Continuous):
             msg="nu > 0, sigma > 0",
         )
 
+    def icdf(value, nu, mu, sigma):
+        res = pt.switch(
+            pt.lt(value, 0.5),
+            -pt.sqrt(nu) * pt.sqrt((1.0 / betaincinv(nu * 0.5, 0.5, 2.0 * value)) - 1.0),
+            pt.sqrt(nu) * pt.sqrt((1.0 / betaincinv(nu * 0.5, 0.5, 2.0 * (1 - value))) - 1.0),
+        )
+        res = mu + res * sigma
+        res = check_icdf_value(res, value)
+        return check_icdf_parameters(
+            res,
+            nu > 0,
+            sigma > 0,
+            msg="nu > 0, sigma > 0",
+        )
+
 
 class Pareto(BoundedContinuous):
     r"""
@@ -2063,7 +2088,7 @@ class Cauchy(Continuous):
     def icdf(value, alpha, beta):
         res = alpha + beta * pt.tan(np.pi * (value - 0.5))
         res = check_icdf_value(res, value)
-        return check_parameters(
+        return check_icdf_parameters(
             res,
             beta > 0,
             msg="beta > 0",
@@ -2147,7 +2172,7 @@ class HalfCauchy(PositiveContinuous):
     def icdf(value, loc, beta):
         res = loc + beta * pt.tan(np.pi * (value) / 2.0)
         res = check_icdf_value(res, value)
-        return check_parameters(
+        return check_icdf_parameters(
             res,
             beta > 0,
             msg="beta > 0",
@@ -2271,6 +2296,16 @@ class Gamma(PositiveContinuous):
             pt.log(pt.gammainc(alpha, beta * value)),
         )
         return check_parameters(res, 0 < alpha, 0 < beta, msg="alpha > 0, beta > 0")
+
+    def icdf(value, alpha, scale):
+        res = scale * gammaincinv(alpha, value)
+        res = check_icdf_value(res, value)
+        return check_icdf_parameters(
+            res,
+            alpha > 0,
+            scale > 0,
+            msg="alpha > 0, beta > 0",
+        )
 
 
 class InverseGamma(PositiveContinuous):
@@ -2556,7 +2591,7 @@ class Weibull(PositiveContinuous):
     def icdf(value, alpha, beta):
         res = beta * (-pt.log(1 - value)) ** (1 / alpha)
         res = check_icdf_value(res, value)
-        return check_parameters(
+        return check_icdf_parameters(
             res,
             alpha > 0,
             beta > 0,
@@ -3116,7 +3151,7 @@ class Triangular(BoundedContinuous):
             upper - np.sqrt((upper - lower) * (upper - c) * (1 - value)),
         )
         res = check_icdf_value(res, value)
-        return check_parameters(
+        return check_icdf_parameters(
             res,
             lower <= c,
             c <= upper,
@@ -3219,7 +3254,7 @@ class Gumbel(Continuous):
     def icdf(value, mu, beta):
         res = mu - beta * pt.log(-pt.log(value))
         res = check_icdf_value(res, value)
-        return check_parameters(
+        return check_icdf_parameters(
             res,
             beta > 0,
             msg="beta > 0",
@@ -3437,7 +3472,7 @@ class Logistic(Continuous):
     def icdf(value, mu, s):
         res = mu + s * pt.log(value / (1 - value))
         res = check_icdf_value(res, value)
-        return check_parameters(
+        return check_icdf_parameters(
             res,
             s > 0,
             msg="s > 0",
@@ -3787,7 +3822,7 @@ class Moyal(Continuous):
     def icdf(value, mu, sigma):
         res = sigma * -pt.log(2.0 * pt.erfcinv(value) ** 2) + mu
         res = check_icdf_value(res, value)
-        return check_parameters(
+        return check_icdf_parameters(
             res,
             sigma > 0,
             msg="sigma > 0",
