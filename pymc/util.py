@@ -16,7 +16,7 @@ import functools
 import warnings
 
 from collections.abc import Sequence
-from typing import Any, NewType, Optional, Union, cast
+from typing import Any, NewType, cast
 
 import arviz
 import cloudpickle
@@ -248,7 +248,7 @@ def biwrap(wrapper):
 
 
 def dataset_to_point_list(
-    ds: Union[xarray.Dataset, dict[str, xarray.DataArray]], sample_dims: Sequence[str]
+    ds: xarray.Dataset | dict[str, xarray.DataArray], sample_dims: Sequence[str]
 ) -> tuple[list[dict[str, np.ndarray]], dict[str, Any]]:
     # All keys of the dataset must be a str
     var_names = cast(list[str], list(ds.keys()))
@@ -284,7 +284,7 @@ def drop_warning_stat(idata: arviz.InferenceData) -> arviz.InferenceData:
     return nidata
 
 
-def chains_and_samples(data: Union[xarray.Dataset, arviz.InferenceData]) -> tuple[int, int]:
+def chains_and_samples(data: xarray.Dataset | arviz.InferenceData) -> tuple[int, int]:
     """Extract and return number of chains and samples in xarray or arviz traces."""
     dataset: xarray.Dataset
     if isinstance(data, xarray.Dataset):
@@ -312,7 +312,7 @@ def hashable(a=None) -> int:
         # first hash the keys and values with hashable
         # then hash the tuple of int-tuples with the builtin
         return hash(tuple((hashable(k), hashable(v)) for k, v in a.items()))
-    if isinstance(a, (tuple, list)):
+    if isinstance(a, tuple | list):
         # lists are mutable and not hashable by default
         # for memoization, we need the hash to depend on the items
         return hash(tuple(hashable(i) for i in a))
@@ -405,14 +405,14 @@ def point_wrapper(core_function):
     return wrapped
 
 
-RandomSeed = Optional[Union[int, Sequence[int], np.ndarray]]
-RandomState = Union[RandomSeed, np.random.RandomState, np.random.Generator]
+RandomSeed = None | int | Sequence[int] | np.ndarray
+RandomState = RandomSeed | np.random.RandomState | np.random.Generator
 
 
 def _get_seeds_per_chain(
     random_state: RandomState,
     chains: int,
-) -> Union[Sequence[int], np.ndarray]:
+) -> Sequence[int] | np.ndarray:
     """Obtain or validate specified integer seeds per chain.
 
     This function process different possible sources of seeding and returns one integer
@@ -448,7 +448,7 @@ def _get_seeds_per_chain(
     if isinstance(random_state, np.random.RandomState):
         return _get_unique_seeds_per_chain(random_state.randint)
 
-    if not isinstance(random_state, (list, tuple, np.ndarray)):
+    if not isinstance(random_state, list | tuple | np.ndarray):
         raise ValueError(f"The `seeds` must be array-like. Got {type(random_state)} instead.")
 
     if len(random_state) != chains:
@@ -459,9 +459,7 @@ def _get_seeds_per_chain(
     return random_state
 
 
-def get_value_vars_from_user_vars(
-    vars: Union[Variable, Sequence[Variable]], model
-) -> list[Variable]:
+def get_value_vars_from_user_vars(vars: Variable | Sequence[Variable], model) -> list[Variable]:
     """Converts user "vars" input into value variables.
 
     More often than not, users will pass random variables, and we will extract the
@@ -527,7 +525,7 @@ def _add_future_warning_tag(var) -> None:
 
 
 def makeiter(a):
-    if isinstance(a, (tuple, list)):
+    if isinstance(a, tuple | list):
         return a
     else:
         return [a]
