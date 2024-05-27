@@ -67,12 +67,13 @@ __all__ = [
     "cont_inputs",
     "floatX",
     "intX",
-    "smartfloatX",
     "jacobian",
     "CallableTensor",
     "join_nonshared_inputs",
     "make_shared_replacements",
     "generator",
+    "convert_data",
+    "convert_generator_data",
     "convert_observed_data",
     "compile_pymc",
 ]
@@ -80,10 +81,23 @@ __all__ = [
 
 def convert_observed_data(data) -> np.ndarray | Variable:
     """Convert user provided dataset to accepted formats."""
-
     if isgenerator(data):
-        return floatX(generator(data))
+        return convert_generator_data(data)
+    return convert_data(data)
 
+
+def convert_generator_data(data) -> TensorVariable:
+    warnings.warn(
+        "Generator data is deprecated and we intend to remove it."
+        " If you disagree and need this, please get in touch via https://github.com/pymc-devs/pymc/issues.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return generator(data)
+
+
+def convert_data(data) -> np.ndarray | Variable:
+    ret: np.ndarray | Variable
     if hasattr(data, "to_numpy") and hasattr(data, "isnull"):
         # typically, but not limited to pandas objects
         vals = data.to_numpy()
@@ -122,16 +136,12 @@ def convert_observed_data(data) -> np.ndarray | Variable:
     else:
         ret = np.asarray(data)
 
-    # type handling to enable index variables when data is int:
-    if hasattr(data, "dtype"):
-        if "int" in str(data.dtype):
-            return intX(ret)
-        # otherwise, assume float:
-        else:
-            return floatX(ret)
-    # needed for uses of this function other than with pm.Data:
-    else:
+    # Data without dtype info is converted to float arrays by default.
+    # This is the most common case for simple examples.
+    if not hasattr(data, "dtype"):
         return floatX(ret)
+    # Otherwise we only convert the precision.
+    return smarttypeX(ret)
 
 
 @_as_tensor_variable.register(pd.Series)
@@ -294,6 +304,14 @@ def smartfloatX(x):
     """
     if str(x.dtype).startswith("float"):
         x = floatX(x)
+    return x
+
+
+def smarttypeX(x):
+    if str(x.dtype).startswith("float"):
+        x = floatX(x)
+    elif str(x.dtype).startswith("int"):
+        x = intX(x)
     return x
 
 
