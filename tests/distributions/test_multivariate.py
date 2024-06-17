@@ -559,7 +559,7 @@ class TestMatchesScipy:
     @pytest.mark.parametrize("x,eta,n,lp", LKJ_CASES)
     def test_lkjcorr(self, x, eta, n, lp):
         with pm.Model() as model:
-            pm.LKJCorr("lkj", eta=eta, n=n, transform=None, return_matrix=False)
+            pm.LKJCorr("lkj", eta=eta, n=n, default_transform=None, return_matrix=False)
 
         point = {"lkj": x}
         decimals = select_by_precision(float64=6, float32=4)
@@ -790,7 +790,7 @@ class TestMatchesScipy:
     )
     def test_stickbreakingweights_logp(self, value, alpha, K, logp):
         with pm.Model() as model:
-            sbw = pm.StickBreakingWeights("sbw", alpha=alpha, K=K, transform=None)
+            sbw = pm.StickBreakingWeights("sbw", alpha=alpha, K=K, default_transform=None)
         point = {"sbw": value}
         npt.assert_almost_equal(
             pm.logp(sbw, value).eval(),
@@ -817,7 +817,7 @@ class TestMatchesScipy:
     def test_stickbreakingweights_vectorized(self, alpha, K, stickbreakingweights_logpdf):
         value = pm.StickBreakingWeights.dist(alpha, K).eval()
         with pm.Model():
-            sbw = pm.StickBreakingWeights("sbw", alpha=alpha, K=K, transform=None)
+            sbw = pm.StickBreakingWeights("sbw", alpha=alpha, K=K, default_transform=None)
         point = {"sbw": value}
         npt.assert_almost_equal(
             pm.logp(sbw, value).eval(),
@@ -1448,7 +1448,7 @@ class TestMvNormalMisc:
                 "chol_cov", n=3, eta=2, sd_dist=sd_dist, compute_corr=True
             )
             mv = pm.MvNormal("mv", mu, chol=chol, size=4)
-            prior = pm.sample_prior_predictive(samples=10, return_inferencedata=False)
+            prior = pm.sample_prior_predictive(draws=10, return_inferencedata=False)
 
         assert prior["mv"].shape == (10, 4, 3)
 
@@ -1462,7 +1462,7 @@ class TestMvNormalMisc:
                 "chol_cov", n=3, eta=2, sd_dist=sd_dist, compute_corr=True
             )
             mv = pm.MvNormal("mv", mu, cov=pm.math.dot(chol, chol.T), size=4)
-            prior = pm.sample_prior_predictive(samples=10, return_inferencedata=False)
+            prior = pm.sample_prior_predictive(draws=10, return_inferencedata=False)
 
         assert prior["mv"].shape == (10, 4, 3)
 
@@ -1473,7 +1473,7 @@ class TestMvNormalMisc:
             corr = pm.LKJCorr("corr", n=3, eta=2, return_matrix=True)
             pm.Deterministic("corr_mat", corr)
             mv = pm.MvNormal("mv", 0.0, cov=corr, size=4)
-            prior = pm.sample_prior_predictive(samples=10, return_inferencedata=False)
+            prior = pm.sample_prior_predictive(draws=10, return_inferencedata=False)
 
         assert prior["corr_mat"].shape == (10, 3, 3)  # square
         assert (prior["corr_mat"][:, [0, 1, 2], [0, 1, 2]] == 1.0).all()  # 1.0 on diagonal
