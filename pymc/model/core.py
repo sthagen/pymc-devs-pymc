@@ -48,7 +48,6 @@ from typing_extensions import Self
 
 from pymc.blocking import DictToArrayBijection, RaveledVars
 from pymc.data import GenTensorVariable, is_minibatch
-from pymc.distributions.transforms import ChainedTransform, _default_transform
 from pymc.exceptions import (
     BlockModelAccessError,
     ImputationWarning,
@@ -1452,6 +1451,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
         -------
         TensorVariable
         """
+        from pymc.distributions.transforms import ChainedTransform, _default_transform
 
         # Make the value variable a transformed value variable,
         # if there's an applicable transform
@@ -1853,7 +1853,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
 
         def debug_parameters(rv):
             if isinstance(rv.owner.op, RandomVariable):
-                inputs = rv.owner.inputs[3:]
+                inputs = rv.owner.op.dist_params(rv.owner)
             else:
                 inputs = [inp for inp in rv.owner.inputs if not isinstance(inp.type, RandomType)]
             rv_inputs = pytensor.function(
