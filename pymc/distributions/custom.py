@@ -73,7 +73,7 @@ def default_support_point(rv, size, *rv_inputs, rv_name=None, has_fallback=False
 
 class CustomDistRV(RandomVariable):
     """
-    Base class for CustomDistRV
+    Base class for CustomDistRV.
 
     This should be subclassed when defining CustomDist objects.
     """
@@ -89,7 +89,7 @@ class CustomDistRV(RandomVariable):
 
 
 class _CustomDist(Distribution):
-    """A distribution that returns a subclass of CustomDistRV"""
+    """A distribution that returns a subclass of CustomDistRV."""
 
     rv_type = CustomDistRV
 
@@ -162,17 +162,17 @@ class _CustomDist(Distribution):
         rv_type = type(
             class_name,
             (CustomDistRV,),
-            dict(
-                name=class_name,
-                inplace=False,
-                ndim_supp=ndim_supp,
-                ndims_params=ndims_params,
-                signature=signature,
-                dtype=dtype,
-                _print_name=(class_name, f"\\operatorname{{{class_name}}}"),
+            {
+                "name": class_name,
+                "inplace": False,
+                "ndim_supp": ndim_supp,
+                "ndims_params": ndims_params,
+                "signature": signature,
+                "dtype": dtype,
+                "_print_name": (class_name, f"\\operatorname{{{class_name}}}"),
                 # Specific to CustomDist
-                _random_fn=random,
-            ),
+                "_random_fn": random,
+            },
         )
 
         # Dispatch custom methods
@@ -194,7 +194,7 @@ class _CustomDist(Distribution):
 
 class CustomSymbolicDistRV(SymbolicRandomVariable):
     """
-    Base class for CustomSymbolicDist
+    Base class for CustomSymbolicDist.
 
     This should be subclassed when defining custom CustomDist objects that have
     symbolic random methods.
@@ -278,10 +278,10 @@ class _CustomSymbolicDist(Distribution):
             class_name,
             (CustomSymbolicDistRV,),
             # If logp is not provided, we try to infer it from the dist graph
-            dict(
-                inline_logprob=logp is None,
-                _print_name=(class_name, f"\\operatorname{{{class_name}}}"),
-            ),
+            {
+                "inline_logprob": logp is None,
+                "_print_name": (class_name, f"\\operatorname{{{class_name}}}"),
+            },
         )
 
         # Dispatch custom methods
@@ -363,7 +363,6 @@ class _CustomSymbolicDist(Distribution):
     @staticmethod
     def _infer_final_signature(signature: str, n_inputs, n_outputs, n_rngs) -> str:
         """Add size and updates to user provided gufunc signature if they are missing."""
-
         # Regex to split across outer commas
         # Copied from https://stackoverflow.com/a/26634150
         outer_commas = re.compile(r",\s*(?![^()]*\))")
@@ -460,7 +459,7 @@ def dist_support_point(op, rv, *args):
 
 
 class CustomDist:
-    """A helper class to create custom distributions
+    """A helper class to create custom distributions.
 
     This class can be used to wrap black-box random and logp methods for use in
     forward and mcmc sampling.
@@ -511,9 +510,9 @@ class CustomDist:
         A callable that calculates the log probability of some given ``value``
         conditioned on certain distribution parameter values. It must have the
         following signature: ``logp(value, *dist_params)``, where ``value`` is
-        an PyTensor tensor that represents the distribution value, and ``dist_params``
+        a PyTensor tensor that represents the distribution value, and ``dist_params``
         are the tensors that hold the values of the distribution parameters.
-        This function must return an PyTensor tensor.
+        This function must return a PyTensor tensor.
 
         When the `dist` function is specified, PyMC will try to automatically
         infer the `logp` when this is not provided.
@@ -524,9 +523,9 @@ class CustomDist:
         A callable that calculates the log cumulative log probability of some given
         ``value`` conditioned on certain distribution parameter values. It must have the
         following signature: ``logcdf(value, *dist_params)``, where ``value`` is
-        an PyTensor tensor that represents the distribution value, and ``dist_params``
+        a PyTensor tensor that represents the distribution value, and ``dist_params``
         are the tensors that hold the values of the distribution parameters.
-        This function must return an PyTensor tensor. If ``None``, a ``NotImplementedError``
+        This function must return a PyTensor tensor. If ``None``, a ``NotImplementedError``
         will be raised when trying to compute the distribution's logcdf.
     support_point : Optional[Callable]
         A callable that can be used to compute the finete logp point of the distribution.
@@ -551,7 +550,7 @@ class CustomDist:
         When specified, `ndim_supp` and `ndims_params` are not needed. See examples below.
     dtype : str
         The dtype of the distribution. All draws and observations passed into the
-        distribution will be cast onto this dtype. This is not needed if an PyTensor
+        distribution will be cast onto this dtype. This is not needed if a PyTensor
         dist function is provided, which should already return the right dtype!
     class_name : str
         Name for the class which will wrap the CustomDist methods. When not specified,

@@ -13,12 +13,11 @@
 #   limitations under the License.
 
 """
-Created on Mar 12, 2011
+Created on Mar 12, 2011.
 
 @author: johnsalvatier
 """
 
-import sys
 import warnings
 
 from collections.abc import Sequence
@@ -62,7 +61,7 @@ def find_MAP(
     seed: int | None = None,
     **kwargs,
 ):
-    """Finds the local maximum a posteriori point given a model.
+    """Find the local maximum a posteriori point given a model.
 
     `find_MAP` should not be used to initialize the NUTS sampler. Simply call
     ``pymc.sample()`` and it will automatically initialize NUTS in a better
@@ -142,7 +141,7 @@ def find_MAP(
     # TODO: If the mapping is fixed, we can simply create graphs for the
     # mapping and avoid all this bijection overhead
     compiled_logp_func = DictToArrayBijection.mapf(model.compile_logp(jacobian=False), start)
-    logp_func = lambda x: compiled_logp_func(RaveledVars(x, x0.point_map_info))  # noqa E731
+    logp_func = lambda x: compiled_logp_func(RaveledVars(x, x0.point_map_info))  # noqa: E731
 
     rvs = [model.values_to_rvs[vars_dict[name]] for name, _, _ in x0.point_map_info]
     try:
@@ -151,7 +150,7 @@ def find_MAP(
         compiled_dlogp_func = DictToArrayBijection.mapf(
             model.compile_dlogp(rvs, jacobian=False), start
         )
-        dlogp_func = lambda x: compiled_dlogp_func(RaveledVars(x, x0.point_map_info))  # noqa E731
+        dlogp_func = lambda x: compiled_dlogp_func(RaveledVars(x, x0.point_map_info))  # noqa: E731
         compute_gradient = True
     except (AttributeError, NotImplementedError, tg.NullTypeGradError):
         compute_gradient = False
@@ -184,7 +183,6 @@ def find_MAP(
                 pm._log.info(e)
         finally:
             cost_func.progress.update(cost_func.task, completed=cost_func.n_eval, refresh=True)
-            print(file=sys.stdout)
 
     mx0 = RaveledVars(mx0, x0.point_map_info)
     unobserved_vars = get_default_varnames(model.unobserved_value_vars, include_transformed)

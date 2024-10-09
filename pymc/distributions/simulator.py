@@ -34,7 +34,7 @@ _log = logging.getLogger(__name__)
 
 class SimulatorRV(RandomVariable):
     """
-    Base class for SimulatorRVs
+    Base class for SimulatorRVs.
 
     This should be subclassed when defining custom Simulator objects.
     """
@@ -63,8 +63,7 @@ class SimulatorRV(RandomVariable):
 
 class Simulator(Distribution):
     r"""
-    Simulator distribution, used for Approximate Bayesian Inference (ABC)
-    with Sequential Monte Carlo (SMC) sampling via :func:`~pymc.sample_smc`.
+    Used for Approximate Bayesian Inference with SMC sampling via :func:`~pymc.sample_smc`.
 
     Simulator distributions have a stochastic pseudo-loglikelihood defined by
     a distance metric between the observed and simulated data, and tweaked
@@ -145,7 +144,7 @@ class Simulator(Distribution):
         return super().__new__(cls, name, *args, **kwargs)
 
     @classmethod
-    def dist(  # type: ignore
+    def dist(  # type: ignore[override]
         cls,
         fn,
         *unnamed_params,
@@ -241,23 +240,23 @@ class Simulator(Distribution):
         sim_op = type(
             class_name,
             (SimulatorRV,),
-            dict(
-                name=class_name,
-                ndim_supp=ndim_supp,
-                ndims_params=ndims_params,
-                signature=signature,
-                dtype=dtype,
-                inplace=False,
-                fn=fn,
-                _distance=distance,
-                _sum_stat=sum_stat,
-                epsilon=epsilon,
-            ),
+            {
+                "name": class_name,
+                "ndim_supp": ndim_supp,
+                "ndims_params": ndims_params,
+                "signature": signature,
+                "dtype": dtype,
+                "inplace": False,
+                "fn": fn,
+                "_distance": distance,
+                "_sum_stat": sum_stat,
+                "epsilon": epsilon,
+            },
         )()
         return sim_op(*params, **kwargs)
 
 
-@_support_point.register(SimulatorRV)  # type: ignore
+@_support_point.register(SimulatorRV)
 def simulator_support_point(op, rv, *inputs):
     sim_inputs = op.dist_params(rv.owner)
     # Take the mean of 10 draws

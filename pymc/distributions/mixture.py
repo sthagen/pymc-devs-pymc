@@ -163,7 +163,7 @@ class MarginalMixtureRV(SymbolicRandomVariable):
 
 class Mixture(Distribution):
     R"""
-    Mixture log-likelihood
+    Mixture log-likelihood.
 
     Often used to model subpopulation heterogeneity
 
@@ -493,7 +493,7 @@ def marginal_mixture_default_transform(op, rv):
 
 class NormalMixture:
     R"""
-    Normal mixture log-likelihood
+    Normal mixture log-likelihood.
 
     .. math::
 
@@ -555,9 +555,9 @@ class NormalMixture:
 
 
 def _zero_inflated_mixture(*, name, nonzero_p, nonzero_dist, **kwargs):
-    """Helper function to create a zero-inflated mixture
+    """Create a zero-inflated mixture (helper function).
 
-    If name is `None`, this function returns an unregistered variable
+    If name is `None`, this function returns an unregistered variable.
     """
     nonzero_p = pt.as_tensor_variable(nonzero_p)
     weights = pt.stack([1 - nonzero_p, nonzero_p], axis=-1)
@@ -702,10 +702,11 @@ class ZeroInflatedBinomial:
 class ZeroInflatedNegativeBinomial:
     R"""
     Zero-Inflated Negative binomial log-likelihood.
+
     The Zero-inflated version of the Negative Binomial (NB).
     The NB distribution describes a Poisson random variable
     whose rate parameter is gamma distributed.
-    The pmf of this distribution is
+    The pmf of this distribution is.
 
     .. math::
 
@@ -799,7 +800,7 @@ class ZeroInflatedNegativeBinomial:
 
 
 def _hurdle_mixture(*, name, nonzero_p, nonzero_dist, dtype, max_n_steps=10_000, **kwargs):
-    """Helper function to create a hurdle mixtures
+    """Create a hurdle mixtures (helper function).
 
     If name is `None`, this function returns an unregistered variable
 

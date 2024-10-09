@@ -12,7 +12,7 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
-"""Base backend for traces
+"""Base backend for traces.
 
 See the docstring for pymc.backends for more information
 """
@@ -55,6 +55,7 @@ class IBaseTrace(ABC, Sized):
     """Sampler stats for each sampler."""
 
     def __len__(self):
+        """Length of the chain."""
         raise NotImplementedError()
 
     def get_values(self, varname: str, burn=0, thin=1) -> np.ndarray:
@@ -101,8 +102,12 @@ class IBaseTrace(ABC, Sized):
         raise NotImplementedError()
 
     def point(self, idx: int) -> dict[str, np.ndarray]:
-        """Return dictionary of point values at `idx` for current chain
-        with variables names as keys.
+        """Return point values at `idx` for current chain.
+
+        Returns
+        -------
+        values : dict[str, np.ndarray]
+            Dictionary of values with variable names as keys.
         """
         raise NotImplementedError()
 
@@ -127,7 +132,7 @@ class IBaseTrace(ABC, Sized):
 
 
 class BaseTrace(IBaseTrace):
-    """Base trace object
+    """Base trace object.
 
     Parameters
     ----------
@@ -208,6 +213,7 @@ class BaseTrace(IBaseTrace):
     # Selection methods
 
     def __getitem__(self, idx):
+        """Get the sample at index `idx`."""
         if isinstance(idx, slice):
             return self._slice(idx)
 
@@ -339,6 +345,7 @@ class MultiTrace:
         self._report = SamplerReport()
 
     def __repr__(self):
+        """Return a string representation of MultiTrace."""
         template = "<{}: {} chains, {} iterations, {} variables>"
         return template.format(self.__class__.__name__, self.nchains, len(self), len(self.varnames))
 
@@ -348,16 +355,18 @@ class MultiTrace:
 
     @property
     def chains(self) -> list[int]:
-        return list(sorted(self._straces.keys()))
+        return sorted(self._straces.keys())
 
     @property
     def report(self) -> SamplerReport:
         return self._report
 
     def __iter__(self):
+        """Return an iterator of the MultiTrace."""
         raise NotImplementedError
 
     def __getitem__(self, idx):
+        """Get the sample at index `idx`."""
         if isinstance(idx, slice):
             return self._slice(idx)
 
@@ -393,6 +402,7 @@ class MultiTrace:
     _attrs = {"_straces", "varnames", "chains", "stat_names", "_report"}
 
     def __getattr__(self, name):
+        """Get the value of the attribute of name `name`."""
         # Avoid infinite recursion when called before __init__
         # variables are set up (e.g., when pickling).
         if name in self._attrs:
@@ -412,6 +422,7 @@ class MultiTrace:
         raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
 
     def __len__(self):
+        """Length of the chains."""
         chain = self.chains[-1]
         return len(self._straces[chain])
 
@@ -546,7 +557,7 @@ class MultiTrace:
         return self._straces[chain].point(idx)
 
     def points(self, chains=None):
-        """Return an iterator over all or some of the sample points
+        """Return an iterator over all or some of the sample points.
 
         Parameters
         ----------
@@ -561,8 +572,7 @@ class MultiTrace:
 
 
 def _squeeze_cat(results, combine: bool, squeeze: bool):
-    """Squeeze and concatenate the results depending on values of
-    `combine` and `squeeze`."""
+    """Squeeze and/or concatenate the results."""
     if combine:
         results = np.concatenate(results)
         if not squeeze:

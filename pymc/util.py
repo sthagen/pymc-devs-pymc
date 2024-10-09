@@ -71,7 +71,7 @@ UNSET = _UnsetType()
 
 
 def withparent(meth):
-    """Helper wrapper that passes calls to parent's instance"""
+    """Pass calls to parent's instance."""
 
     def wrapped(self, *args, **kwargs):
         res = meth(self, *args, **kwargs)
@@ -87,9 +87,9 @@ def withparent(meth):
 
 
 class treelist(list):
-    """A list that passes mutable extending operations used in Model
-    to parent list instance.
-    Extending treelist you will also extend its parent
+    """A list that passes mutable extending operations used in Model to parent list instance.
+
+    Extending treelist you will also extend its parent.
     """
 
     def __init__(self, iterable=(), parent=None):
@@ -99,7 +99,7 @@ class treelist(list):
         if self.parent is not None:
             self.parent.extend(self)
 
-    # typechecking here works bad
+    # here typechecking works bad
     append = withparent(list.append)
     __iadd__ = withparent(list.__iadd__)
     extend = withparent(list.extend)
@@ -113,6 +113,7 @@ class treelist(list):
             return list.__contains__(self, item)
 
     def __setitem__(self, key, value):
+        """Set value at index `key` with value `value`."""
         raise NotImplementedError(
             "Method is removed as we are not able to determine appropriate logic for it"
         )
@@ -121,9 +122,11 @@ class treelist(list):
     # This is my best guess about what this should do.  I might be happier
     # to kill both of these if they are not used.
     def __mul__(self, other) -> "treelist":
+        """Multiplication."""
         return cast("treelist", super().__mul__(other))
 
     def __imul__(self, other) -> "treelist":
+        """Inplace multiplication."""
         t0 = len(self)
         super().__imul__(other)
         if self.parent is not None:
@@ -132,9 +135,9 @@ class treelist(list):
 
 
 class treedict(dict):
-    """A dict that passes mutable extending operations used in Model
-    to parent dict instance.
-    Extending treedict you will also extend its parent
+    """A dict that passes mutable extending operations used in Model to parent dict instance.
+
+    Extending treedict you will also extend its parent.
     """
 
     def __init__(self, iterable=(), parent=None, **kwargs):
@@ -144,7 +147,7 @@ class treedict(dict):
         if self.parent is not None:
             self.parent.update(self)
 
-    # typechecking here works bad
+    # here typechecking works bad
     __setitem__ = withparent(dict.__setitem__)
     update = withparent(dict.update)
 
@@ -160,7 +163,7 @@ class treedict(dict):
 
 def get_transformed_name(name, transform):
     r"""
-    Consistent way of transforming names
+    Consistent way of transforming names.
 
     Parameters
     ----------
@@ -179,7 +182,7 @@ def get_transformed_name(name, transform):
 
 def is_transformed_name(name):
     r"""
-    Quickly check if a name was transformed with `get_transformed_name`
+    Quickly check if a name was transformed with `get_transformed_name`.
 
     Parameters
     ----------
@@ -196,7 +199,7 @@ def is_transformed_name(name):
 
 def get_untransformed_name(name):
     r"""
-    Undo transformation in `get_transformed_name`. Throws ValueError if name wasn't transformed
+    Undo transformation in `get_transformed_name`. Throws ValueError if name wasn't transformed.
 
     Parameters
     ----------
@@ -214,7 +217,7 @@ def get_untransformed_name(name):
 
 
 def get_default_varnames(var_iterator, include_transformed):
-    r"""Helper to extract default varnames from a trace.
+    r"""Extract default varnames from a trace.
 
     Parameters
     ----------
@@ -264,7 +267,7 @@ def biwrap(wrapper):
 
 
 def drop_warning_stat(idata: arviz.InferenceData) -> arviz.InferenceData:
-    """Returns a new ``InferenceData`` object with the "warning" stat removed from sample stats groups.
+    """Return a new ``InferenceData`` object with the "warning" stat removed from sample stats groups.
 
     This function should be applied to an ``InferenceData`` object obtained with
     ``pm.sample(keep_warning_stat=True)`` before trying to ``.to_netcdf()`` or ``.to_zarr()`` it.
@@ -298,7 +301,8 @@ def chains_and_samples(data: xarray.Dataset | arviz.InferenceData) -> tuple[int,
 
 def hashable(a=None) -> int:
     """
-    Hashes many kinds of objects, including some that are unhashable through the builtin `hash` function.
+    Hash many kinds of objects, including some that are unhashable through the builtin `hash` function.
+
     Lists and tuples are hashed based on their elements.
     """
     if isinstance(a, dict):
@@ -334,25 +338,31 @@ class HashableWrapper:
         self.obj = obj
 
     def __hash__(self):
+        """Return a hash of the object."""
         return hashable(self.obj)
 
     def __eq__(self, other):
+        """Compare this object with `other`."""
         return self.obj == other
 
     def __repr__(self):
+        """Return a string representation of the object."""
         return f"{type(self).__name__}({self.obj})"
 
 
 class WithMemoization:
     def __hash__(self):
+        """Return a hash of the object."""
         return hash(id(self))
 
     def __getstate__(self):
+        """Return an object to pickle."""
         state = self.__dict__.copy()
         state.pop("_cache", None)
         return state
 
     def __setstate__(self, state):
+        """Set the object from a pickled object."""
         self.__dict__.update(state)
 
 
@@ -369,7 +379,7 @@ def locally_cachedmethod(f):
 
 
 def check_dist_not_registered(dist, model=None):
-    """Check that a dist is not registered in the model already"""
+    """Check that a dist is not registered in the model already."""
     from pymc.model import modelcontext
 
     try:
@@ -386,8 +396,10 @@ def check_dist_not_registered(dist, model=None):
 
 
 def point_wrapper(core_function):
-    """Wrap an pytensor compiled function to be able to ingest point dictionaries whilst
-    ignoring the keys that are not valid inputs to the core function.
+    """
+    Wrap a pytensor compiled function to ingest point dictionaries.
+
+    It ignores the keys that are not valid inputs to the core function.
     """
     ins = [i.name for i in core_function.maker.fgraph.inputs if not isinstance(i, SharedVariable)]
 
@@ -434,7 +446,7 @@ def _get_seeds_per_chain(
         return seeds
 
     try:
-        int_random_state = int(random_state)  # type: ignore
+        int_random_state = int(random_state)  # type: ignore[arg-type]
     except Exception:
         int_random_state = None
 
@@ -459,7 +471,7 @@ def _get_seeds_per_chain(
 
 
 def get_value_vars_from_user_vars(vars: Variable | Sequence[Variable], model) -> list[Variable]:
-    """Converts user "vars" input into value variables.
+    """Convert user "vars" input into value variables.
 
     More often than not, users will pass random variables, and we will extract the
     respective value variables, but we also allow for the input to already be value
@@ -531,7 +543,7 @@ def makeiter(a):
 
 
 class CustomProgress(Progress):
-    """A child of Progress that allows to disable progress bars and its container
+    """A child of Progress that allows to disable progress bars and its container.
 
     The implementation simply checks an `is_enabled` flag and generates the progress bar only if
     it's `True`.
@@ -543,11 +555,13 @@ class CustomProgress(Progress):
             super().__init__(*args, **kwargs)
 
     def __enter__(self):
+        """Enter the context manager."""
         if self.is_enabled:
             self.start()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        """Exit the context manager."""
         if self.is_enabled:
             super().__exit__(exc_type, exc_val, exc_tb)
 

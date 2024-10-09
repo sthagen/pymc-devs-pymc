@@ -96,9 +96,7 @@ T = TypeVar("T", bound="ContextMeta")
 
 
 class ContextMeta(type):
-    """Functionality for objects that put themselves in a context using
-    the `with` statement.
-    """
+    """Functionality for objects that put themselves in a context manager."""
 
     def __new__(cls, name, bases, dct, **kwargs):
         """Add __enter__ and __exit__ methods to the class."""
@@ -128,9 +126,10 @@ class ContextMeta(type):
         super().__init__(name, bases, nmspc)
 
     def get_context(cls, error_if_none=True, allow_block_model_access=False) -> T | None:
-        """Return the most recently pushed context object of type ``cls``
-        on the stack, or ``None``. If ``error_if_none`` is True (default),
-        raise a ``TypeError`` instead of returning ``None``."""
+        """Return the most recently pushed context object of type ``cls`` on the stack, or ``None``.
+
+        If ``error_if_none`` is True (default), raise a ``TypeError`` instead of returning ``None``.
+        """
         try:
             candidate: T | None = cls.get_contexts()[-1]
         except IndexError:
@@ -144,8 +143,7 @@ class ContextMeta(type):
         return candidate
 
     def get_contexts(cls) -> list[T]:
-        """Return a stack of context instances for the ``context_class``
-        of ``cls``."""
+        """Return a stack of context instances for the ``context_class`` of ``cls``."""
         # This lazily creates the context class's contexts
         # thread-local object, as needed. This seems inelegant to me,
         # but since the context class is not guaranteed to exist when
@@ -206,10 +204,7 @@ class ContextMeta(type):
 
 
 def modelcontext(model: Optional["Model"]) -> "Model":
-    """
-    Return the given model or, if none was supplied, try to find one in
-    the context stack.
-    """
+    """Return the given model or, if None was supplied, try to find one in the context stack."""
     if model is None:
         model = Model.get_context(error_if_none=False)
 
@@ -221,7 +216,7 @@ def modelcontext(model: Optional["Model"]) -> "Model":
 
 
 class ValueGradFunction:
-    """Create an PyTensor function that computes a value and its gradient.
+    """Create a PyTensor function that computes a value and its gradient.
 
     Parameters
     ----------
@@ -502,9 +497,11 @@ class Model(WithMemoization, metaclass=ContextMeta):
 
     if TYPE_CHECKING:
 
-        def __enter__(self: Self) -> Self: ...
+        def __enter__(self: Self) -> Self:
+            """Enter the context manager."""
 
-        def __exit__(self, exc_type: None, exc_val: None, exc_tb: None) -> None: ...
+        def __exit__(self, exc_type: None, exc_val: None, exc_tb: None) -> None:
+            """Exit the context manager."""
 
     def __new__(cls, *args, model: Union[Literal[UNSET], None, "Model"] = UNSET, **kwargs):
         # resolves the parent instance
@@ -596,7 +593,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
         return self.parent is None
 
     def logp_dlogp_function(self, grad_vars=None, tempered=False, **kwargs):
-        """Compile an PyTensor function that computes logp and gradient.
+        """Compile a PyTensor function that computes logp and gradient.
 
         Parameters
         ----------
@@ -851,30 +848,27 @@ class Model(WithMemoization, metaclass=ContextMeta):
 
     @property
     def datalogp(self) -> Variable:
-        """PyTensor scalar of log-probability of the observed variables and
-        potential terms"""
+        """PyTensor scalar of log-probability of the observed variables and potential terms."""
         return self.observedlogp + self.potentiallogp
 
     @property
     def varlogp(self) -> Variable:
-        """PyTensor scalar of log-probability of the unobserved random variables
-        (excluding deterministic)."""
+        """PyTensor scalar of log-probability of the unobserved random variables (excluding deterministic)."""
         return self.logp(vars=self.free_RVs)
 
     @property
     def varlogp_nojac(self) -> Variable:
-        """PyTensor scalar of log-probability of the unobserved random variables
-        (excluding deterministic) without jacobian term."""
+        """PyTensor scalar of log-probability of the unobserved random variables (excluding deterministic) without jacobian term."""
         return self.logp(vars=self.free_RVs, jacobian=False)
 
     @property
     def observedlogp(self) -> Variable:
-        """PyTensor scalar of log-probability of the observed variables"""
+        """PyTensor scalar of log-probability of the observed variables."""
         return self.logp(vars=self.observed_RVs)
 
     @property
     def potentiallogp(self) -> Variable:
-        """PyTensor scalar of log-probability of the Potential terms"""
+        """PyTensor scalar of log-probability of the Potential terms."""
         # Convert random variables in Potential expression into their log-likelihood
         # inputs and apply their transforms, if any
         potentials = self.replace_rvs_by_values(self.potentials)
@@ -885,17 +879,12 @@ class Model(WithMemoization, metaclass=ContextMeta):
 
     @property
     def value_vars(self):
-        """List of unobserved random variables used as inputs to the model's
-        log-likelihood (which excludes deterministics).
-        """
+        """List of unobserved random variables used as inputs to the model's log-likelihood (which excludes deterministics)."""
         return [self.rvs_to_values[v] for v in self.free_RVs]
 
     @property
     def unobserved_value_vars(self):
-        """List of all random variables (including untransformed projections),
-        as well as deterministics used as inputs and outputs of the model's
-        log-likelihood graph
-        """
+        """List of all random variables (including untransformed projections), as well as deterministics used as inputs and outputs of the model's log-likelihood graph."""
         vars = []
         transformed_rvs = []
         for rv in self.free_RVs:
@@ -915,18 +904,19 @@ class Model(WithMemoization, metaclass=ContextMeta):
 
     @property
     def discrete_value_vars(self):
-        """All the discrete value variables in the model"""
+        """All the discrete value variables in the model."""
         return list(typefilter(self.value_vars, discrete_types))
 
     @property
     def continuous_value_vars(self):
-        """All the continuous value variables in the model"""
+        """All the continuous value variables in the model."""
         return list(typefilter(self.value_vars, continuous_types))
 
     @property
     def basic_RVs(self):
-        """List of random variables the model is defined in terms of
-        (which excludes deterministics).
+        """List of random variables the model is defined in terms of.
+
+        This excludes deterministics.
 
         These are the actual random variable terms that make up the
         "sample-space" graph (i.e. you can sample these graphs by compiling them
@@ -982,7 +972,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
         *,
         length: int | Variable | None = None,
     ):
-        """Registers a dimension coordinate with the model.
+        """Register a dimension coordinate with the model.
 
         Parameters
         ----------
@@ -1083,7 +1073,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
         return
 
     def initial_point(self, random_seed: SeedSequenceSeed = None) -> dict[str, np.ndarray]:
-        """Computes the initial point of the model.
+        """Compute the initial point of the model.
 
         Parameters
         ----------
@@ -1099,7 +1089,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
         return Point(fn(random_seed), model=self)
 
     def set_initval(self, rv_var, initval):
-        """Sets an initial value (strategy) for a random variable."""
+        """Set an initial value (strategy) for a random variable."""
         if initval is not None and not isinstance(initval, Variable | str):
             # Convert scalars or array-like inputs to ndarrays
             initval = rv_var.type.filter(initval)
@@ -1112,7 +1102,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
         values: Sequence | np.ndarray,
         coords: dict[str, Sequence] | None = None,
     ):
-        """Changes the values of a data variable in the model.
+        """Change the values of a data variable in the model.
 
         In contrast to pm.Data().set_value, this method can also
         update the corresponding coordinates.
@@ -1419,8 +1409,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
         transform: Transform,
         value_var: Variable | None = None,
     ) -> TensorVariable:
-        """Create a ``TensorVariable`` that will be used as the random
-        variable's "value" in log-likelihood graphs.
+        """Create a ``TensorVariable`` that will be used as the random variable's "value" in log-likelihood graphs.
 
         In general, we'll call this type of variable the "value" variable.
 
@@ -1545,7 +1534,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
         return name
 
     def name_for(self, name):
-        """Checks if name has prefix and adds if needed"""
+        """Check if name has prefix and adds if needed."""
         name = self._validate_name(name)
         if self.prefix:
             if not name.startswith(self.prefix + "::"):
@@ -1556,7 +1545,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
             return name
 
     def name_of(self, name):
-        """Checks if name has prefix and deletes if needed"""
+        """Check if name has prefix and deletes if needed."""
         name = self._validate_name(name)
         if not self.prefix or not name:
             return name
@@ -1566,6 +1555,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
             return name
 
     def __getitem__(self, key):
+        """Get the variable named `key`."""
         try:
             return self.named_vars[key]
         except KeyError as e:
@@ -1575,17 +1565,20 @@ class Model(WithMemoization, metaclass=ContextMeta):
                 raise e
 
     def __contains__(self, key):
+        """Check if the model contains a variable named `key`."""
         return key in self.named_vars or self.name_for(key) in self.named_vars
 
     def __copy__(self):
+        """Clone the model."""
         return self.copy()
 
     def __deepcopy__(self, _):
+        """Clone the model."""
         return self.copy()
 
     def copy(self):
         """
-        Clone the model
+        Clone the model.
 
         To access variables in the cloned model use `cloned_model["var_name"]`.
 
@@ -1667,7 +1660,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
         point_fn: bool = True,
         **kwargs,
     ) -> PointFunc | Function:
-        """Compiles an PyTensor function
+        """Compiles a PyTensor function.
 
         Parameters
         ----------
@@ -1705,8 +1698,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
         return fn
 
     def profile(self, outs, *, n=1000, point=None, profile=True, **kwargs):
-        """Compiles and profiles an PyTensor function which returns ``outs`` and
-        takes values of model vars as a dict as an argument.
+        """Compile and profile a PyTensor function which returns ``outs`` and takes values of model vars as a dict as an argument.
 
         Parameters
         ----------
@@ -1752,7 +1744,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
         )
 
     def eval_rv_shapes(self) -> dict[str, tuple[int, ...]]:
-        """Evaluates shapes of untransformed AND transformed free variables.
+        """Evaluate shapes of untransformed AND transformed free variables.
 
         Returns
         -------
@@ -1778,8 +1770,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
         return {name: tuple(shape) for name, shape in zip(names, f())}
 
     def check_start_vals(self, start, **kwargs):
-        r"""Check that the starting values for MCMC do not cause the relevant log probability
-        to evaluate to something invalid (e.g. Inf or NaN)
+        r"""Check that the logp is defined and finite at the starting point.
 
         Parameters
         ----------
@@ -1830,7 +1821,7 @@ class Model(WithMemoization, metaclass=ContextMeta):
                 )
 
     def point_logps(self, point=None, round_vals=2, **kwargs):
-        """Computes the log probability of `point` for all random variables in the model.
+        """Compute the log probability of `point` for all random variables in the model.
 
         Parameters
         ----------
@@ -2089,7 +2080,7 @@ Model._context_class = Model
 
 
 class BlockModelAccess(Model):
-    """Can be used to prevent user access to Model contexts"""
+    """Can be used to prevent user access to Model contexts."""
 
     def __init__(self, *args, error_msg_on_access="Model access is blocked", **kwargs):
         self.error_msg_on_access = error_msg_on_access
@@ -2104,9 +2095,11 @@ def new_or_existing_block_model_access(*args, **kwargs):
 
 
 def set_data(new_data, model=None, *, coords=None):
-    """Sets the value of one or more data container variables.  Note that the shape is also
-    dynamic, it is updated when the value is changed.  See the examples below for two common
-    use-cases that take advantage of this behavior.
+    """Set the value of one or more data container variables.
+
+    Note that the shape is also dynamic, it is updated when the value is
+    changed.  See the examples below for two common use-cases that take
+    advantage of this behavior.
 
     Parameters
     ----------
@@ -2184,7 +2177,7 @@ def compile_fn(
     model: Model | None = None,
     **kwargs,
 ) -> PointFunc | Function:
-    """Compiles an PyTensor function
+    """Compiles a PyTensor function.
 
     Parameters
     ----------
@@ -2204,7 +2197,6 @@ def compile_fn(
     -------
     Compiled PyTensor function
     """
-
     model = modelcontext(model)
     return model.compile_fn(
         outs,
@@ -2216,7 +2208,9 @@ def compile_fn(
 
 
 def Point(*args, filter_model_vars=False, **kwargs) -> dict[VarName, np.ndarray]:
-    """Build a point. Uses same args as dict() does.
+    """Build a point.
+
+    Uses same args as dict() does.
     Filters out variables not in the model. All keys are strings.
 
     Parameters

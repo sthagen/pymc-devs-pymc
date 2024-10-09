@@ -43,7 +43,7 @@ _log = logging.getLogger(__name__)
 
 
 def find_data(pmodel: Model) -> list[mcb.DataVariable]:
-    """Extracts data variables from a model."""
+    """Extract data variables from a model."""
     observed_rvs = {pmodel.rvs_to_values[rv] for rv in pmodel.observed_RVs}
     dvars = []
     # All data containers are named vars!
@@ -114,7 +114,7 @@ class ChainRecordAdapter(IBaseTrace):
 
     def record(self, draw: Mapping[str, np.ndarray], stats: Sequence[Mapping[str, Any]]):
         values = self._point_fn(draw)
-        value_dict = {n: v for n, v in zip(self.varnames, values)}
+        value_dict = dict(zip(self.varnames, values))
         stats_dict = self._statsbj.map(stats)
         # Apply pickling to objects stats
         for fname in self._statsbj.object_stats.keys():
@@ -124,13 +124,14 @@ class ChainRecordAdapter(IBaseTrace):
         return self._chain.append(value_dict, stats_dict)
 
     def __len__(self):
+        """Length of the chain."""
         return len(self._chain)
 
     def get_values(self, varname: str, burn=0, thin=1) -> np.ndarray:
         return self._chain.get_draws(varname, slice(burn, None, thin))
 
     def _get_stats(self, fname: str, slc: slice) -> np.ndarray:
-        """Wraps `self._chain.get_stats` but unpickles automatically."""
+        """Wrap `self._chain.get_stats` but unpickle automatically."""
         values = self._chain.get_stats(fname, slc)
         # Unpickle object stats
         if fname in self._statsbj.object_stats:

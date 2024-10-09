@@ -134,7 +134,7 @@ class MetropolisState(StepMethodState):
 
 
 class Metropolis(ArrayStepShared):
-    """Metropolis-Hastings sampling step"""
+    """Metropolis-Hastings sampling step."""
 
     name = "metropolis"
 
@@ -161,7 +161,7 @@ class Metropolis(ArrayStepShared):
         rng=None,
         **kwargs,
     ):
-        """Create an instance of a Metropolis stepper
+        """Create an instance of a Metropolis stepper.
 
         Parameters
         ----------
@@ -187,7 +187,6 @@ class Metropolis(ArrayStepShared):
             :py:class:`~numpy.random.Generator` object. Refer to
             :py:func:`pymc.util.get_random_generator` for more information.
         """
-
         model = pm.modelcontext(model)
         initial_values = model.initial_point()
 
@@ -245,7 +244,7 @@ class Metropolis(ArrayStepShared):
         self.accepted_sum = np.zeros(dims, dtype=int)
 
         # remember initial settings before tuning so they can be reset
-        self._untuned_settings = dict(scaling=self.scaling, steps_until_tune=tune_interval)
+        self._untuned_settings = {"scaling": self.scaling, "steps_until_tune": tune_interval}
 
         # TODO: This is not being used when compiling the logp function!
         self.mode = mode
@@ -255,7 +254,7 @@ class Metropolis(ArrayStepShared):
         super().__init__(vars, shared, rng=rng)
 
     def reset_tuning(self):
-        """Resets the tuned sampler parameters to their initial values."""
+        """Reset the tuned sampler parameters to their initial values."""
         for attr, initial_value in self._untuned_settings.items():
             setattr(self, attr, initial_value)
         self.accepted_sum[:] = 0
@@ -324,8 +323,9 @@ class Metropolis(ArrayStepShared):
 
 def tune(scale, acc_rate):
     """
-    Tunes the scaling parameter for the proposal distribution
-    according to the acceptance rate over the last tune_interval:
+    Tune the scaling parameter for the proposal distribution.
+
+    Uses the acceptance rate over the last tune_interval.
 
     Rate    Variance adaptation
     ----    -------------------
@@ -381,7 +381,7 @@ class BinaryMetropolisState(StepMethodState):
 
 
 class BinaryMetropolis(ArrayStep):
-    """Metropolis-Hastings optimized for binary variables
+    """Metropolis-Hastings optimized for binary variables.
 
     Parameters
     ----------
@@ -422,7 +422,7 @@ class BinaryMetropolis(ArrayStep):
 
         vars = get_value_vars_from_user_vars(vars, model)
 
-        if not all([v.dtype in pm.discrete_types for v in vars]):
+        if not all(v.dtype in pm.discrete_types for v in vars):
             raise ValueError("All variables must be Bernoulli for BinaryMetropolis")
 
         super().__init__(vars, [model.compile_logp()], rng=rng)
@@ -457,10 +457,7 @@ class BinaryMetropolis(ArrayStep):
 
     @staticmethod
     def competence(var):
-        """
-        BinaryMetropolis is only suitable for binary (bool)
-        and Categorical variables with k=1.
-        """
+        """BinaryMetropolis is only suitable for binary (bool) and Categorical variables with k=1."""
         distribution = getattr(var.owner, "op", None)
 
         if isinstance(distribution, BernoulliRV):
@@ -490,7 +487,7 @@ class BinaryGibbsMetropolisState(StepMethodState):
 
 
 class BinaryGibbsMetropolis(ArrayStep):
-    """A Metropolis-within-Gibbs step method optimized for binary variables
+    """A Metropolis-within-Gibbs step method optimized for binary variables.
 
     Parameters
     ----------
@@ -541,7 +538,7 @@ class BinaryGibbsMetropolis(ArrayStep):
             self.shuffle_dims = False
             self.order = order
 
-        if not all([v.dtype in pm.discrete_types for v in vars]):
+        if not all(v.dtype in pm.discrete_types for v in vars):
             raise ValueError("All variables must be binary for BinaryGibbsMetropolis")
 
         super().__init__(vars, [model.compile_logp()], rng=rng)
@@ -579,10 +576,7 @@ class BinaryGibbsMetropolis(ArrayStep):
 
     @staticmethod
     def competence(var):
-        """
-        BinaryMetropolis is only suitable for Bernoulli
-        and Categorical variables with k=2.
-        """
+        """BinaryMetropolis is only suitable for Bernoulli and Categorical variables with k=2."""
         distribution = getattr(var.owner, "op", None)
 
         if isinstance(distribution, BernoulliRV):
@@ -756,10 +750,7 @@ class CategoricalGibbsMetropolis(ArrayStep):
 
     @staticmethod
     def competence(var):
-        """
-        CategoricalGibbsMetropolis is only suitable for Bernoulli and
-        Categorical variables.
-        """
+        """CategoricalGibbsMetropolis is only suitable for Bernoulli and Categorical variables."""
         distribution = getattr(var.owner, "op", None)
 
         if isinstance(distribution, CategoricalRV):
@@ -916,8 +907,8 @@ class DEMetropolis(PopulationArrayStepShared):
         if self.other_chains is None:  # pragma: no cover
             raise RuntimeError("Population sampler has not been linked to the other chains")
         ir1, ir2 = self.rng.choice(self.other_chains, 2, replace=False)
-        r1 = DictToArrayBijection.map(self.population[ir1])  # type: ignore
-        r2 = DictToArrayBijection.map(self.population[ir2])  # type: ignore
+        r1 = DictToArrayBijection.map(self.population[ir1])  # type: ignore[index]
+        r2 = DictToArrayBijection.map(self.population[ir2])  # type: ignore[index]
         # propose a jump
         q = floatX(q0d + self.lamb * (r1.data - r2.data) + epsilon)
 
@@ -1063,12 +1054,12 @@ class DEMetropolisZ(ArrayStepShared):
         # cache local history for the Z-proposals
         self._history: list[np.ndarray] = []
         # remember initial settings before tuning so they can be reset
-        self._untuned_settings = dict(
-            scaling=self.scaling,
-            lamb=self.lamb,
-            steps_until_tune=tune_interval,
-            accepted=self.accepted,
-        )
+        self._untuned_settings = {
+            "scaling": self.scaling,
+            "lamb": self.lamb,
+            "steps_until_tune": tune_interval,
+            "accepted": self.accepted,
+        }
 
         self.mode = mode
 
@@ -1077,7 +1068,7 @@ class DEMetropolisZ(ArrayStepShared):
         super().__init__(vars, shared, rng=rng)
 
     def reset_tuning(self):
-        """Resets the tuned sampler parameters and history to their initial values."""
+        """Reset the tuned sampler parameters and history to their initial values."""
         # history can't be reset via the _untuned_settings dict because it's a list
         self._history = []
         for attr, initial_value in self._untuned_settings.items():
@@ -1136,8 +1127,9 @@ class DEMetropolisZ(ArrayStepShared):
         return RaveledVars(q_new, point_map_info), [stats]
 
     def stop_tuning(self):
-        """At the end of the tuning phase, this method removes the first x% of the history
-        so future proposals are not informed by unconverged tuning iterations.
+        """Remove the first x% of the history at the end of the tuning phase.
+
+        This is so future proposals are not informed by unconverged tuning iterations.
         """
         it = len(self._history)
         n_drop = int(self.tune_drop_fraction * it)

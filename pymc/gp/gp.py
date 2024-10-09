@@ -47,8 +47,7 @@ _noise_deprecation_warning = (
 
 
 def _handle_sigma_noise_parameters(sigma, noise):
-    """Helper function for transition of 'noise' parameter to be named 'sigma'."""
-
+    """Help transition of 'noise' parameter to be named 'sigma'."""
     if (sigma is None and noise is None) or (sigma is not None and noise is not None):
         raise ValueError("'sigma' argument must be specified.")
 
@@ -60,9 +59,7 @@ def _handle_sigma_noise_parameters(sigma, noise):
 
 
 class Base:
-    R"""
-    Base class.
-    """
+    """Base class."""
 
     def __init__(self, *, mean_func=Zero(), cov_func=Constant(0.0)):
         self.mean_func = mean_func
@@ -180,8 +177,7 @@ class Latent(Base):
 
     def prior(self, name, X, n_outputs=1, reparameterize=True, jitter=JITTER_DEFAULT, **kwargs):
         R"""
-        Returns the GP prior distribution evaluated over the input
-        locations `X`.
+        Return the GP prior distribution evaluated over the input locations `X`.
 
         This is the prior probability over the space
         of functions described by its mean and covariance function.
@@ -253,8 +249,7 @@ class Latent(Base):
 
     def conditional(self, name, Xnew, given=None, jitter=JITTER_DEFAULT, **kwargs):
         R"""
-        Returns the conditional distribution evaluated over new input
-        locations `Xnew`.
+        Return the conditional distribution evaluated over new input locations `Xnew`.
 
         Given a set of function values `f` that
         the GP prior was over, the conditional distribution over a
@@ -337,6 +332,7 @@ class TP(Latent):
         super().__init__(mean_func=mean_func, cov_func=scale_func)
 
     def __add__(self, other):
+        """Add two Student's T processes."""
         raise TypeError("Student's T processes aren't additive")
 
     def _build_prior(self, name, X, reparameterize=True, jitter=JITTER_DEFAULT, **kwargs):
@@ -352,8 +348,7 @@ class TP(Latent):
 
     def prior(self, name, X, reparameterize=True, jitter=JITTER_DEFAULT, **kwargs):
         R"""
-        Returns the TP prior distribution evaluated over the input
-        locations `X`.
+        Return the TP prior distribution evaluated over the input locations `X`.
 
         This is the prior probability over the space
         of functions described by its mean and covariance function.
@@ -375,7 +370,6 @@ class TP(Latent):
             Extra keyword arguments that are passed to :class:`~pymc.MvStudentT`
             distribution constructor.
         """
-
         f = self._build_prior(name, X, reparameterize, jitter, **kwargs)
         self.X = X
         self.f = f
@@ -397,8 +391,7 @@ class TP(Latent):
 
     def conditional(self, name, Xnew, jitter=JITTER_DEFAULT, **kwargs):
         R"""
-        Returns the conditional distribution evaluated over new input
-        locations `Xnew`.
+        Return the conditional distribution evaluated over new input locations `Xnew`.
 
         Given a set of function values `f` that
         the TP prior was over, the conditional distribution over a
@@ -418,7 +411,6 @@ class TP(Latent):
             Extra keyword arguments that are passed to :class:`~pymc.MvStudentT` distribution
             constructor.
         """
-
         X = self.X
         f = self.f
         nu2, mu, cov = self._build_conditional(Xnew, X, f, jitter)
@@ -491,8 +483,7 @@ class Marginal(Base):
         **kwargs,
     ):
         R"""
-        Returns the marginal likelihood distribution, given the input
-        locations `X` and the data `y`.
+        Return the marginal likelihood distribution, given the input locations `X` and the data `y`.
 
         This is the integral over the product of the GP prior and a normal likelihood.
 
@@ -598,8 +589,7 @@ class Marginal(Base):
         self, name, Xnew, pred_noise=False, given=None, jitter=JITTER_DEFAULT, **kwargs
     ):
         R"""
-        Returns the conditional distribution evaluated over new input
-        locations `Xnew`.
+        Return the conditional distribution evaluated over new input locations `Xnew`.
 
         Given a set of function values `f` that the GP prior was over, the
         conditional distribution over a set of new points, `f_*` is:
@@ -630,7 +620,6 @@ class Marginal(Base):
             Extra keyword arguments that are passed to :class:`~pymc.MvNormal` distribution
             constructor.
         """
-
         givens = self._get_given_vals(given)
         mu, cov = self._build_conditional(Xnew, pred_noise, False, *givens, jitter)
         return pm.MvNormal(name, mu=mu, cov=cov, **kwargs)
@@ -646,9 +635,9 @@ class Marginal(Base):
         model=None,
     ):
         R"""
-        Return the mean vector and covariance matrix of the conditional
-        distribution as numpy arrays, given a `point`, such as the MAP
-        estimate or a sample from a `trace`.
+        Return mean and covariance of the conditional distribution given a `point`.
+
+        The `point` might be the MAP estimate or a sample from a trace.
 
         Parameters
         ----------
@@ -681,8 +670,7 @@ class Marginal(Base):
 
     def _predict_at(self, Xnew, diag=False, pred_noise=False, given=None, jitter=JITTER_DEFAULT):
         R"""
-        Return the mean vector and covariance matrix of the conditional
-        distribution as symbolic variables.
+        Return symbolic mean and covariance of the conditional distribution.
 
         Parameters
         ----------
@@ -779,6 +767,7 @@ class MarginalApprox(Marginal):
         super().__init__(mean_func=mean_func, cov_func=cov_func)
 
     def __add__(self, other):
+        """Add two Gaussian processes."""
         new_gp = super().__add__(other)
         if not self.approx == other.approx:
             raise TypeError("Cannot add GPs with different approximations")
@@ -818,9 +807,10 @@ class MarginalApprox(Marginal):
         self, name, X, Xu, y, sigma=None, noise=None, jitter=JITTER_DEFAULT, **kwargs
     ):
         R"""
-        Returns the approximate marginal likelihood distribution, given the input
-        locations `X`, inducing point locations `Xu`, data `y`, and white noise
-        standard deviations `sigma`.
+        Return the approximate marginal likelihood distribution.
+
+        This is given the input locations `X`, inducing point locations `Xu`,
+        data `y`, and white noise standard deviations `sigma`.
 
         Parameters
         ----------
@@ -845,7 +835,6 @@ class MarginalApprox(Marginal):
             Extra keyword arguments that are passed to :class:`~pymc.MvNormal` distribution
             constructor.
         """
-
         self.X = X
         self.Xu = Xu
         self.y = y
@@ -911,8 +900,7 @@ class MarginalApprox(Marginal):
         self, name, Xnew, pred_noise=False, given=None, jitter=JITTER_DEFAULT, **kwargs
     ):
         R"""
-        Returns the approximate conditional distribution of the GP evaluated over
-        new input locations `Xnew`.
+        Return the approximate conditional distribution of the GP evaluated over new input locations `Xnew`.
 
         Parameters
         ----------
@@ -934,7 +922,6 @@ class MarginalApprox(Marginal):
             Extra keyword arguments that are passed to :class:`~pymc.MvNormal` distribution
             constructor.
         """
-
         givens = self._get_given_vals(given)
         mu, cov = self._build_conditional(Xnew, pred_noise, False, *givens, jitter)
         return pm.MvNormal(name, mu=mu, cov=cov, **kwargs)
@@ -1012,6 +999,7 @@ class LatentKron(Base):
         super().__init__(mean_func=mean_func, cov_func=cov_func)
 
     def __add__(self, other):
+        """Add two Gaussian processes."""
         raise TypeError("Additive, Kronecker-structured processes not implemented")
 
     def _build_prior(self, name, Xs, jitter, **kwargs):
@@ -1024,8 +1012,7 @@ class LatentKron(Base):
 
     def prior(self, name, Xs, jitter=JITTER_DEFAULT, **kwargs):
         """
-        Returns the prior distribution evaluated over the input
-        locations `Xs`.
+        Return the prior distribution evaluated over the input locations `Xs`.
 
         Parameters
         ----------
@@ -1070,8 +1057,7 @@ class LatentKron(Base):
 
     def conditional(self, name, Xnew, jitter=JITTER_DEFAULT, **kwargs):
         """
-        Returns the conditional distribution evaluated over new input
-        locations `Xnew`.
+        Return the conditional distribution evaluated over new input locations `Xnew`.
 
         `Xnew` will be split by columns and fed to the relevant
         covariance functions based on their `input_dim`. For example, if
@@ -1173,6 +1159,7 @@ class MarginalKron(Base):
         super().__init__(mean_func=mean_func, cov_func=cov_func)
 
     def __add__(self, other):
+        """Add two Gaussian processes."""
         raise TypeError("Additive, Kronecker-structured processes not implemented")
 
     def _build_marginal_likelihood(self, Xs):
@@ -1192,8 +1179,7 @@ class MarginalKron(Base):
 
     def marginal_likelihood(self, name, Xs, y, sigma, is_observed=True, **kwargs):
         """
-        Returns the marginal likelihood distribution, given the input
-        locations `cartesian(*Xs)` and the data `y`.
+        Return the marginal likelihood distribution, given the input locations `cartesian(*Xs)` and the data `y`.
 
         Parameters
         ----------
@@ -1271,8 +1257,7 @@ class MarginalKron(Base):
 
     def conditional(self, name, Xnew, pred_noise=False, diag=False, **kwargs):
         """
-        Returns the conditional distribution evaluated over new input
-        locations `Xnew`, just as in `Marginal`.
+        Return the conditional distribution evaluated over new input locations `Xnew`, just as in `Marginal`.
 
         `Xnew` will be split by columns and fed to the relevant
         covariance functions based on their `input_dim`. For example, if
@@ -1307,9 +1292,9 @@ class MarginalKron(Base):
 
     def predict(self, Xnew, point=None, diag=False, pred_noise=False, model=None):
         R"""
-        Return the mean vector and covariance matrix of the conditional
-        distribution as numpy arrays, given a `point`, such as the MAP
-        estimate or a sample from a `trace`.
+        Return mean and covariance of the conditional distribution given a `point`.
+
+        The `point` might be the MAP estimate or a sample from a trace.
 
         Parameters
         ----------
@@ -1333,8 +1318,7 @@ class MarginalKron(Base):
 
     def _predict_at(self, Xnew, diag=False, pred_noise=False):
         R"""
-        Return the mean vector and covariance matrix of the conditional
-        distribution as symbolic variables.
+        Return symbolic mean and covariance of the conditional distribution.
 
         Parameters
         ----------

@@ -30,9 +30,7 @@ from pymc.pytensorf import StringType, find_rng_nodes, toposort_replace
 
 
 class ModelVar(Op):
-    """A dummy Op that describes the purpose of a Model variable and contains
-    meta-information as additional inputs (value and dims).
-    """
+    """A dummy Op that describes the purpose of a Model variable and contains meta-information as additional inputs (value and dims)."""
 
     def make_node(self, rv, *dims):
         assert isinstance(rv, Variable)
@@ -151,7 +149,6 @@ def fgraph_from_model(
     memo: Dict
         A dictionary mapping original model variables to the equivalent nodes in the fgraph.
     """
-
     if any(v is not None for v in model.rvs_to_initial_values.values()):
         raise NotImplementedError("Cannot convert models with non-default initial_values")
 

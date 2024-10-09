@@ -55,7 +55,7 @@ from pymc.util import _FutureWarningValidatingScratchpad
 
 
 class TestBugfixes:
-    @pytest.mark.parametrize("dist_cls,kwargs", [(MvNormal, dict()), (MvStudentT, dict(nu=2))])
+    @pytest.mark.parametrize("dist_cls,kwargs", [(MvNormal, {}), (MvStudentT, {"nu": 2})])
     @pytest.mark.parametrize("dims", [1, 2, 4])
     def test_issue_3051(self, dims, dist_cls, kwargs):
         mu = np.repeat(0, dims)
@@ -284,7 +284,7 @@ class TestDiracDelta:
         pymc_dist_params = {"c": 3}
         expected_rv_op_params = {"c": 3}
         reference_dist_params = {"c": 3}
-        reference_dist = lambda self: self.diracdelta_rng_fn  # noqa E731
+        reference_dist = lambda self: self.diracdelta_rng_fn  # noqa: E731
         checks_to_run = [
             "check_pymc_params_match_rv_op",
             "check_pymc_draws_match_reference",

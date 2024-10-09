@@ -136,8 +136,10 @@ class Transform(abc.ABC):
     def backward(
         self, value: TensorVariable, *inputs: Variable
     ) -> TensorVariable | tuple[TensorVariable, ...]:
-        """Invert the transformation. Multiple values may be returned when the
-        transformation is not 1-to-1"""
+        """Invert the transformation.
+
+        Multiple values may be returned when the transformation is not 1-to-1.
+        """
 
     def log_jac_det(self, value: TensorVariable, *inputs) -> TensorVariable:
         """Construct the log of the absolute value of the Jacobian determinant."""
@@ -153,11 +155,12 @@ class Transform(abc.ABC):
             return pt.log(pt.abs(pt.nlinalg.det(pt.atleast_2d(jacobian(phi_inv, [value])[0]))))
 
     def __str__(self):
+        """Return a string representation of the object."""
         return f"{self.__class__.__name__}"
 
 
 class MeasurableTransform(MeasurableElemwise):
-    """A placeholder used to specify a log-likelihood for a transformed measurable variable"""
+    """A placeholder used to specify a log-likelihood for a transformed measurable variable."""
 
     valid_scalar_types = (
         Exp,
@@ -370,7 +373,7 @@ def measurable_neg_to_product(fgraph, node):
 
 @node_rewriter([sub])
 def measurable_sub_to_neg(fgraph, node):
-    """Convert subtraction involving `MeasurableVariable`s to addition with neg"""
+    """Convert subtraction involving `MeasurableVariable`s to addition with neg."""
     if not filter_measurable_variables(node.inputs):
         return None
 
@@ -452,7 +455,6 @@ def measurable_power_exponent_to_exp(fgraph, node):
 )
 def find_measurable_transforms(fgraph: FunctionGraph, node: Node) -> list[Node] | None:
     """Find measurable transformations from Elemwise operators."""
-
     # Node was already converted
     if isinstance(node.op, MeasurableOp):
         return None
@@ -846,7 +848,7 @@ class IntervalTransform(Transform):
     name = "interval"
 
     def __init__(self, args_fn: Callable[..., tuple[Variable | None, Variable | None]]):
-        """
+        """Create the IntervalTransform object.
 
         Parameters
         ----------

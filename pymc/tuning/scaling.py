@@ -26,7 +26,7 @@ __all__ = ["find_hessian", "trace_cov", "guess_scaling"]
 
 def fixed_hessian(point, model=None):
     """
-    Returns a fixed Hessian for any chain location.
+    Return a fixed Hessian for any chain location.
 
     Parameters
     ----------
@@ -35,7 +35,6 @@ def fixed_hessian(point, model=None):
     vars: list
         Variables for which Hessian is to be calculated.
     """
-
     model = modelcontext(model)
     point = Point(point, model=model)
 
@@ -45,7 +44,7 @@ def fixed_hessian(point, model=None):
 
 def find_hessian(point, vars=None, model=None, negate_output=True):
     """
-    Returns Hessian of logp at the point passed.
+    Return Hessian of logp at the point passed.
 
     Parameters
     ----------
@@ -61,7 +60,7 @@ def find_hessian(point, vars=None, model=None, negate_output=True):
 
 def find_hessian_diag(point, vars=None, model=None, negate_output=True):
     """
-    Returns Hessian of logp at the point passed.
+    Return Hessian of logp at the point passed.
 
     Parameters
     ----------
@@ -100,7 +99,7 @@ def adjust_precision(tau, scaling_bound=1e-8):
     return exp(bounded) ** 2
 
 
-def bound(a, l, u):  # noqa E741
+def bound(a, l, u):  # noqa: E741
     return np.maximum(np.minimum(a, u), l)
 
 
@@ -110,7 +109,7 @@ def eig_recompose(val, vec):
 
 def trace_cov(trace, vars=None, model=None):
     """
-    Calculate the flattened covariance matrix using a sample trace
+    Calculate the flattened covariance matrix using a sample trace.
 
     Useful if you want to base your covariance matrix for further sampling on some initial samples.
 

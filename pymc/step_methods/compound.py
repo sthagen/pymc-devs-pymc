@@ -13,7 +13,7 @@
 #   limitations under the License.
 
 """
-Created on Mar 7, 2011
+Created on Mar 7, 2011.
 
 @author: johnsalvatier
 """
@@ -40,6 +40,7 @@ __all__ = ("Competence", "CompoundStep")
 @unique
 class Competence(IntEnum):
     """Enum for characterizing competence classes of step methods.
+
     Values include:
     0: INCOMPATIBLE
     1: COMPATIBLE
@@ -58,7 +59,7 @@ def infer_warn_stats_info(
     sds: dict[str, tuple[StatDtype, StatShape]],
     stepname: str,
 ) -> tuple[list[dict[str, StatDtype]], dict[str, tuple[StatDtype, StatShape]]]:
-    """Helper function to get `stats_dtypes` and `stats_dtypes_shapes` from either of them."""
+    """Get `stats_dtypes` and `stats_dtypes_shapes` from either of them."""
     # Avoid side-effects on the original lists/dicts
     stats_dtypes = [d.copy() for d in stats_dtypes]
     sds = sds.copy()
@@ -213,7 +214,7 @@ def flat_statname(sampler_idx: int, sname: str) -> str:
 def get_stats_dtypes_shapes_from_steps(
     steps: Iterable[BlockedStep],
 ) -> dict[str, tuple[StatDtype, StatShape]]:
-    """Combines stats dtype shape dictionaries from multiple step methods.
+    """Combine stats dtype shape dictionaries from multiple step methods.
 
     In the resulting stats dict, each sampler stat is prefixed by `sampler_#__`.
     """
@@ -233,8 +234,7 @@ class CompoundStepState(DataClassState):
 
 
 class CompoundStep(WithSamplingState):
-    """Step method composed of a list of several other step
-    methods applied in sequence."""
+    """Step method composed of a list of several other step methods applied in sequence."""
 
     _state_class = CompoundStepState
 

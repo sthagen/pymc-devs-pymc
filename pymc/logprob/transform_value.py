@@ -139,7 +139,6 @@ def transform_values(fgraph: FunctionGraph, node: Apply) -> list[Apply] | None:
     variable is specified on the log scale and back-transform it to obtain
     ``Y`` on the natural scale.
     """
-
     values_to_transforms: TransformValuesMapping | None = getattr(
         fgraph, "values_to_transforms", None
     )
@@ -210,7 +209,8 @@ class TransformValuesRewrite(GraphRewriter):
         self,
         values_to_transforms: dict[TensorVariable, Transform | None],
     ):
-        """
+        """Create the rewriter.
+
         Parameters
         ----------
         values_to_transforms
@@ -220,7 +220,6 @@ class TransformValuesRewrite(GraphRewriter):
             not be transformed.
 
         """
-
         self.values_to_transforms = values_to_transforms
 
     def add_requirements(self, fgraph):

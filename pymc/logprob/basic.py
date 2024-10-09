@@ -87,7 +87,6 @@ def _warn_rvs_in_inferred_graph(graph: TensorVariable | Sequence[TensorVariable]
     This makes it impossible (or difficult) to replace it by the respective values afterward,
     so we instruct users to do it beforehand.
     """
-
     rvs_in_graph = _find_unallowed_rvs_in_graph(graph)
     if rvs_in_graph:
         warnings.warn(
@@ -415,8 +414,7 @@ def conditional_logp(
     extra_rewrites: GraphRewriter | NodeRewriter | None = None,
     **kwargs,
 ) -> dict[TensorVariable, TensorVariable]:
-    r"""Create a map between variables and conditional log-probabilities
-    such that the sum is their joint log-probability.
+    r"""Create a map between variables and conditional logps such that the sum is their joint logp.
 
     The `rv_values` dictionary specifies a joint probability graph defined by
     pairs of random variables and respective measure-space input parameters
@@ -583,7 +581,6 @@ def transformed_conditional_logp(
     This helper will only return the subset of logprob terms corresponding to `rvs`.
     All rvs_to_values and rvs_to_transforms mappings are required.
     """
-
     transform_rewrite = None
     values_to_transforms = {
         rvs_to_values[rv]: transform
@@ -592,7 +589,7 @@ def transformed_conditional_logp(
     }
     if values_to_transforms:
         # There seems to be an incorrect type hint in TransformValuesRewrite
-        transform_rewrite = TransformValuesRewrite(values_to_transforms)  # type: ignore
+        transform_rewrite = TransformValuesRewrite(values_to_transforms)  # type: ignore[arg-type]
 
     kwargs.setdefault("warn_rvs", False)
     temp_logp_terms = conditional_logp(

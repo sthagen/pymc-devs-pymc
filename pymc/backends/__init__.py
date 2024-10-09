@@ -12,7 +12,7 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
-"""Storage backends for traces
+"""Storage backends for traces.
 
 The NDArray (pymc.backends.NDArray) backend holds the entire trace in memory.
 
@@ -85,8 +85,8 @@ try:
     RunType: TypeAlias = Run
     HAS_MCB = True
 except ImportError:
-    TraceOrBackend = BaseTrace  # type: ignore
-    RunType = type(None)  # type: ignore
+    TraceOrBackend = BaseTrace  # type: ignore[misc]
+    RunType = type(None)  # type: ignore[assignment, misc]
 
 
 __all__ = ["to_inference_data", "predictions_to_inference_data"]
@@ -101,7 +101,7 @@ def _init_trace(
     model: Model,
     trace_vars: list[TensorVariable] | None = None,
 ) -> BaseTrace:
-    """Initializes a trace backend for a chain."""
+    """Initialize a trace backend for a chain."""
     strace: BaseTrace
     if trace is None:
         strace = NDArray(model=model, vars=trace_vars)
@@ -126,7 +126,7 @@ def init_traces(
     model: Model,
     trace_vars: list[TensorVariable] | None = None,
 ) -> tuple[RunType | None, Sequence[IBaseTrace]]:
-    """Initializes a trace recorder for each chain."""
+    """Initialize a trace recorder for each chain."""
     if HAS_MCB and isinstance(backend, Backend):
         return init_chain_adapters(
             backend=backend,

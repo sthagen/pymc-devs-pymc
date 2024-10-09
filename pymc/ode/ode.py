@@ -32,7 +32,7 @@ floatX = pytensor.config.floatX
 
 class DifferentialEquation(Op):
     r"""
-    Specify an ordinary differential equation
+    Specify an ordinary differential equation.
 
     Due to the nature of the model (as well as included solvers), the process of ODE solution may perform slowly.  A faster alternative library based on PyMC--sunode--has implemented Adams' method and BDF (backward differentation formula).  More information about sunode is available at: https://github.com/aseyboldt/sunode.
 
@@ -108,7 +108,9 @@ class DifferentialEquation(Op):
         self._output_sensitivities = {}
 
     def _system(self, Y, t, p):
-        r"""The function that will be passed to odeint. Solves both ODE and sensitivities.
+        r"""Solve both ODE and sensitivities.
+
+        This function will be passed to odeint.
 
         Parameters
         ----------

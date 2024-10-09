@@ -75,7 +75,7 @@ _log = logging.getLogger(__name__)
 
 
 def get_constant_coords(trace_coords: dict[str, np.ndarray], model: Model) -> set:
-    """Get the set of coords that have remained constant between the trace and model"""
+    """Get the set of coords that have remained constant between the trace and model."""
     constant_coords = set()
     for dim, coord in trace_coords.items():
         current_coord = model.coords.get(dim, None)
@@ -219,7 +219,7 @@ def compile_forward_sampling_function(
     # Walk the graph from inputs to outputs and tag the volatile variables
     nodes: list[Variable] = general_toposort(
         fg.outputs, deps=lambda x: x.owner.inputs if x.owner else []
-    )  # type: ignore
+    )  # type: ignore[call-overload]
     volatile_nodes: set[Any] = set()
     for node in nodes:
         if (
@@ -284,7 +284,7 @@ def draw(
     random_seed: RandomState = None,
     **kwargs,
 ) -> np.ndarray | list[np.ndarray]:
-    """Draw samples for one variable or a list of variables
+    """Draw samples for one variable or a list of variables.
 
     Parameters
     ----------
@@ -346,7 +346,7 @@ def draw(
 
 
 def observed_dependent_deterministics(model: Model):
-    """Find deterministics that depend directly on observed variables"""
+    """Find deterministics that depend directly on observed variables."""
     deterministics = model.deterministics
     observed_rvs = set(model.observed_RVs)
     blockers = model.basic_RVs
@@ -446,7 +446,7 @@ def sample_prior_predictive(
     )
 
     # All model variables have a name, but mypy does not know this
-    _log.info(f"Sampling: {list(sorted(volatile_basic_rvs, key=lambda var: var.name))}")  # type: ignore
+    _log.info(f"Sampling: {sorted(volatile_basic_rvs, key=lambda var: var.name)}")  # type: ignore[arg-type, return-value]
     values = zip(*(sampler_fn() for i in range(draws)))
 
     data = {k: np.stack(v) for k, v in zip(names, values)}
@@ -460,7 +460,7 @@ def sample_prior_predictive(
 
     if not return_inferencedata:
         return prior
-    ikwargs: dict[str, Any] = dict(model=model)
+    ikwargs: dict[str, Any] = {"model": model}
     if idata_kwargs:
         ikwargs.update(idata_kwargs)
     return pm.to_inference_data(prior=prior, **ikwargs)
@@ -754,7 +754,6 @@ def sample_posterior_predictive(
 
 
     """
-
     _trace: MultiTrace | PointList
     nchain: int
     if idata_kwargs is None:
@@ -850,7 +849,7 @@ def sample_posterior_predictive(
     )
     sampler_fn = point_wrapper(_sampler_fn)
     # All model variables have a name, but mypy does not know this
-    _log.info(f"Sampling: {list(sorted(volatile_basic_rvs, key=lambda var: var.name))}")  # type: ignore
+    _log.info(f"Sampling: {sorted(volatile_basic_rvs, key=lambda var: var.name)}")  # type: ignore[arg-type, return-value]
     ppc_trace_t = _DefaultTrace(samples)
 
     progress = CustomProgress(

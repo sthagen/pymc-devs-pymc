@@ -34,7 +34,6 @@
 #   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 #   SOFTWARE.
 
-
 from pathlib import Path
 
 from pytensor import tensor as pt
@@ -112,7 +111,7 @@ def logprob_join(op, values, axis, *base_rvs, **kwargs):
         axis=axis,
     )
 
-    base_rvs_to_split_values = {base_rv: value for base_rv, value in zip(base_rvs, split_values)}
+    base_rvs_to_split_values = dict(zip(base_rvs, split_values))
     logps = [
         _logprob_helper(base_var, split_value)
         for base_var, split_value in base_rvs_to_split_values.items()
@@ -140,7 +139,7 @@ def logprob_join(op, values, axis, *base_rvs, **kwargs):
 
 @node_rewriter([MakeVector, Join])
 def find_measurable_stacks(fgraph, node) -> list[TensorVariable] | None:
-    r"""Finds `Joins`\s and `MakeVector`\s for which a `logprob` can be computed."""
+    r"""Find `Joins`\s and `MakeVector`\s for which a `logprob` can be computed."""
     from pymc.pytensorf import toposort_replace
 
     if isinstance(node.op, MeasurableOp):
@@ -165,7 +164,7 @@ def find_measurable_stacks(fgraph, node) -> list[TensorVariable] | None:
     # the IR construction
     replacements = [(base_var, promised_valued_rv(base_var)) for base_var in base_vars]
     temp_fgraph = FunctionGraph(outputs=base_vars, clone=False)
-    toposort_replace(temp_fgraph, replacements)  # type: ignore
+    toposort_replace(temp_fgraph, replacements)  # type: ignore[arg-type]
     new_base_vars = temp_fgraph.outputs
 
     if is_join:
@@ -182,7 +181,7 @@ class MeasurableDimShuffle(MeasurableOp, DimShuffle):
 
     # Need to get the absolute path of `c_func_file`, otherwise it tries to
     # find it locally and fails when a new `Op` is initialized
-    c_func_file = str(DimShuffle.get_path(Path(DimShuffle.c_func_file)))
+    c_func_file = str(DimShuffle.get_path(Path(DimShuffle.c_func_file)))  # type: ignore[arg-type]
 
 
 @_logprob.register(MeasurableDimShuffle)
@@ -218,7 +217,7 @@ def logprob_dimshuffle(op: MeasurableDimShuffle, values, base_var, **kwargs):
 
 @node_rewriter([DimShuffle])
 def find_measurable_dimshuffles(fgraph, node) -> list[TensorVariable] | None:
-    r"""Finds `Dimshuffle`\s for which a `logprob` can be computed."""
+    r"""Find `Dimshuffle`\s for which a `logprob` can be computed."""
     from pymc.distributions.distribution import SymbolicRandomVariable
 
     if isinstance(node.op, MeasurableOp):

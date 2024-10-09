@@ -106,7 +106,6 @@ def remove_promised_valued_rvs(outputs):
 @node_rewriter((Elemwise, Alloc, DimShuffle, *subtensor_ops))
 def local_lift_DiracDelta(fgraph, node):
     r"""Lift basic `Op`\s through `DiracDelta`\s."""
-
     if len(node.outputs) > 1:
         return
 
@@ -200,7 +199,7 @@ def construct_ir_fgraph(
     A custom IR rewriter can be specified. By default,
     `logprob_rewrites_db.query(RewriteDatabaseQuery(include=["basic"]))` is used.
 
-    Our measurable IR takes the form of an PyTensor graph that is more-or-less
+    Our measurable IR takes the form of a PyTensor graph that is more-or-less
     equivalent to a given PyTensor graph (i.e. the keys of `rv_values`) but
     contains `Op`s that are subclasses of the `MeasurableOp` type in
     place of ones that do not inherit from `MeasurableOp` in the original
@@ -223,7 +222,6 @@ def construct_ir_fgraph(
     -------
     A `FunctionGraph` of the measurable IR.
     """
-
     # We add `ShapeFeature` because it will get rid of references to the old
     # `RandomVariable`s that have been lifted; otherwise, it will be difficult
     # to give good warnings when an unaccounted for `RandomVariable` is encountered
@@ -238,7 +236,7 @@ def construct_ir_fgraph(
     # Replace valued RVs by ValuedVar Ops so that rewrites are aware of conditioning points
     # We use clones of the value variables so that they are not affected by rewrites
     cloned_values = tuple(v.clone() for v in rv_values.values())
-    ir_rv_values = {rv: value for rv, value in zip(fgraph.outputs, cloned_values)}
+    ir_rv_values = dict(zip(fgraph.outputs, cloned_values))
 
     replacements = tuple((rv, valued_rv(rv, value)) for rv, value in ir_rv_values.items())
     toposort_replace(fgraph, replacements, reverse=True)

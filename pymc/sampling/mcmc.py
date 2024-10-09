@@ -221,7 +221,7 @@ def assign_step_methods(
             has_gradient = getattr(var, "dtype") not in discrete_types
             if has_gradient:
                 try:
-                    tg.grad(model_logp, var)  # type: ignore
+                    tg.grad(model_logp, var)  # type: ignore[arg-type]
                 except (NotImplementedError, tg.NullTypeGradError):
                     has_gradient = False
 
@@ -229,7 +229,7 @@ def assign_step_methods(
             rv_var = model.values_to_rvs[var]
             selected = max(
                 methods_list,
-                key=lambda method, var=rv_var, has_gradient=has_gradient: method._competence(  # type: ignore
+                key=lambda method, var=rv_var, has_gradient=has_gradient: method._competence(  # type: ignore[misc]
                     var, has_gradient
                 ),
             )
@@ -254,8 +254,8 @@ def _print_step_hierarchy(s: Step, level: int = 0) -> None:
 
 
 def all_continuous(vars):
-    """Check that vars not include discrete variables"""
-    if any([(var.dtype in discrete_types) for var in vars]):
+    """Check that vars not include discrete variables."""
+    if any((var.dtype in discrete_types) for var in vars):
         return False
     else:
         return True
@@ -908,8 +908,10 @@ def _sample_return(
     idata_kwargs: dict[str, Any],
     model: Model,
 ) -> InferenceData | MultiTrace:
-    """Final step of `pm.sampler` that picks/slices chains,
-    runs diagnostics and converts to the desired return type."""
+    """Pick/slice chains, run diagnostics and convert to the desired return type.
+
+    Final step of `pm.sampler`.
+    """
     # Pick and slice chains to keep the maximum number of samples
     if discard_tuned_samples:
         traces, length = _choose_chains(traces, tune)
@@ -947,7 +949,7 @@ def _sample_return(
 
     idata = None
     if compute_convergence_checks or return_inferencedata:
-        ikwargs: dict[str, Any] = dict(model=model, save_warmup=not discard_tuned_samples)
+        ikwargs: dict[str, Any] = {"model": model, "save_warmup": not discard_tuned_samples}
         ikwargs.update(idata_kwargs)
         idata = pm.to_inference_data(mtrace, **ikwargs)
 
@@ -966,7 +968,7 @@ def _sample_return(
 
 
 def _check_start_shape(model, start: PointType):
-    """Checks that the prior evaluations and initial points have identical shapes.
+    """Check that the prior evaluations and initial points have identical shapes.
 
     Parameters
     ----------
@@ -1001,7 +1003,7 @@ def _sample_many(
     callback: SamplingIteratorCallback | None = None,
     **kwargs,
 ):
-    """Samples all chains sequentially.
+    """Sample all chains sequentially.
 
     Parameters
     ----------
@@ -1045,7 +1047,7 @@ def _sample(
     callback=None,
     **kwargs,
 ) -> None:
-    """Main iteration for singleprocess sampling.
+    """Sample one chain (singleprocess).
 
     Multiple step methods are supported via compound step methods.
 
@@ -1125,7 +1127,7 @@ def _iter_sample(
     model: Model | None = None,
     callback: SamplingIteratorCallback | None = None,
 ) -> Iterator[bool]:
-    """Generator for sampling one chain. (Used in singleprocess sampling.)
+    """Sample one chain with a generator (singleprocess).
 
     Parameters
     ----------
@@ -1210,7 +1212,7 @@ def _mp_sample(
     mp_ctx=None,
     **kwargs,
 ) -> None:
-    """Main iteration for multiprocess sampling.
+    """Sample all chains (multiprocess).
 
     Parameters
     ----------
@@ -1312,7 +1314,6 @@ def _init_jitter(
     start : ``pymc.model.Point``
         Starting point for sampler
     """
-
     ipfns = make_initial_point_fns_per_chain(
         model=model,
         overrides=initvals,

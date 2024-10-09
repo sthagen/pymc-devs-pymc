@@ -14,11 +14,7 @@
 
 # Contains code from AePPL, Copyright (c) 2021-2022, Aesara Developers.
 
-# coding: utf-8
-"""
-A collection of common probability distributions for stochastic
-nodes in PyMC.
-"""
+"""A collection of common probability distributions for stochastic nodes in PyMC."""
 
 import warnings
 
@@ -137,19 +133,19 @@ __all__ = [
 
 
 class PositiveContinuous(Continuous):
-    """Base class for positive continuous distributions"""
+    """Base class for positive continuous distributions."""
 
 
 class UnitContinuous(Continuous):
-    """Base class for continuous distributions on [0,1]"""
+    """Base class for continuous distributions on [0,1]."""
 
 
 class CircularContinuous(Continuous):
-    """Base class for circular continuous distributions"""
+    """Base class for circular continuous distributions."""
 
 
 class BoundedContinuous(Continuous):
-    """Base class for bounded continuous distributions"""
+    """Base class for bounded continuous distributions."""
 
     # Indices of the arguments that define the lower and upper bounds of the distribution
     bound_args_indices: list[int] | None = None
@@ -216,8 +212,10 @@ def assert_negative_support(var, label, distname, value=-1e-6):
 
 def get_tau_sigma(tau=None, sigma=None):
     r"""
-    Find precision and standard deviation. The link between the two
-    parameterizations is given by the inverse relationship:
+    Find precision and standard deviation.
+
+    The link between the two parameterizations is given by the inverse
+    relationship:
 
     .. math::
         \tau = \frac{1}{\sigma^2}
@@ -370,10 +368,7 @@ flat = FlatRV()
 
 
 class Flat(Continuous):
-    """
-    Uninformative log-likelihood that returns 0 regardless of
-    the passed value.
-    """
+    """Uninformative log-likelihood that returns 0 regardless of the passed value."""
 
     rv_op = flat
 
@@ -3766,8 +3761,7 @@ interpolated = InterpolatedRV()
 
 class Interpolated(BoundedContinuous):
     r"""
-    Univariate probability distribution defined as a linear interpolation
-    of probability density function evaluated on some lattice of points.
+    Univariate linear interpolation of pdf evaluated on some lattice of points.
 
     The lattice can be uneven, so the steps between different points can have
     different size and it is possible to vary the precision between regions
@@ -3837,9 +3831,7 @@ class Interpolated(BoundedContinuous):
         return super().dist([x_points, pdf_points, cdf_points], **kwargs)
 
     def support_point(rv, size, x_points, pdf_points, cdf_points):
-        """
-        Estimates the expectation integral using the trapezoid rule; cdf_points are not used.
-        """
+        """Estimates the expectation integral using the trapezoid rule; cdf_points are not used."""
         x_fx = pt.mul(x_points, pdf_points)  # x_i * f(x_i) for all xi's in x_points
         support_point = (
             pt.sum(pt.mul(pt.diff(x_points, axis=-1), x_fx[..., 1:] + x_fx[..., :-1])) / 2
@@ -3993,7 +3985,7 @@ class PolyaGammaRV(RandomVariable):
     @classmethod
     def rng_fn(cls, rng, h, z, size=None) -> np.ndarray:
         """
-        Generate a random sample from the distribution with the given parameters
+        Generate a random sample from the distribution with the given parameters.
 
         Parameters
         ----------

@@ -37,8 +37,7 @@ def find_constrained_prior(
     **kwargs,
 ) -> dict[str, float]:
     """
-    Find optimal parameters to get `mass` % of probability
-    of a :ref:`distribution <api_distributions>` between `lower` and `upper`.
+    Find optimal parameters to get `mass` % of probability of a distribution between `lower` and `upper`.
 
     Note: only works for one- and two-parameter distributions, as there
     are exactly two constraints. Fix some combination of parameters
@@ -199,9 +198,7 @@ def find_constrained_prior(
         )
 
     # save optimal parameters
-    opt_params = {
-        param_name: param_value for param_name, param_value in zip(init_guess.keys(), opt.x)
-    }
+    opt_params = dict(zip(init_guess.keys(), opt.x))
     if fixed_params is not None:
         opt_params.update(fixed_params)
     return opt_params

@@ -76,7 +76,7 @@ def _logprob(
 
 
 def _logprob_helper(rv, *values, **kwargs):
-    """Helper that calls `_logprob` dispatcher."""
+    """Help call `_logprob` dispatcher."""
     logprob = _logprob(rv.owner.op, values, *rv.owner.inputs, **kwargs)
 
     name = rv.name
@@ -109,7 +109,7 @@ def _logcdf(
 
 
 def _logcdf_helper(rv, value, **kwargs):
-    """Helper that calls `_logcdf` dispatcher."""
+    """Help call `_logcdf` dispatcher."""
     logcdf = _logcdf(rv.owner.op, value, *rv.owner.inputs, name=rv.name, **kwargs)
 
     if rv.name:
@@ -134,7 +134,7 @@ def _icdf(
 
 
 def _icdf_helper(rv, value, **kwargs):
-    """Helper that calls `_icdf` dispatcher."""
+    """Help call `_icdf` dispatcher."""
     rv_icdf = _icdf(rv.owner.op, value, *rv.owner.inputs, **kwargs)
 
     if rv.name:
@@ -144,14 +144,14 @@ def _icdf_helper(rv, value, **kwargs):
 
 
 class MeasurableOp(abc.ABC):
-    """An operation whose outputs can be assigned a measure/log-probability"""
+    """An operation whose outputs can be assigned a measure/log-probability."""
 
 
 MeasurableOp.register(RandomVariable)
 
 
 class MeasurableElemwise(MeasurableOp, Elemwise):
-    """Base class for Measurable Elemwise variables"""
+    """Base class for Measurable Elemwise variables."""
 
     valid_scalar_types: tuple[MetaType, ...] = ()
 
@@ -164,6 +164,7 @@ class MeasurableElemwise(MeasurableOp, Elemwise):
         super().__init__(scalar_op, *args, **kwargs)
 
     def __str__(self):
+        """Return a string representation of the object."""
         return f"Measurable{super().__str__()}"
 
 

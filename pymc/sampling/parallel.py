@@ -50,6 +50,7 @@ class RemoteTraceback(Exception):
         self.tb = tb
 
     def __str__(self):
+        """Return a string representation of the object."""
         return self.tb
 
 
@@ -61,6 +62,7 @@ class ExceptionWithTraceback:
         self.tb = f'\n"""\n{tb}"""'
 
     def __reduce__(self):
+        """Return a tuple to pickle."""
         return rebuild_exc, (self.exc, self.tb)
 
 
@@ -80,6 +82,7 @@ def rebuild_exc(exc, tb):
 
 class _Process:
     """Separate process for each chain.
+
     We communicate with the main process using a pipe,
     and send finished samples using shared memory.
     """
@@ -275,9 +278,7 @@ class ProcessAdapter:
 
     @property
     def shared_point_view(self):
-        """May only be written to or read between a `recv_draw`
-        call from the process and a `write_next` or `abort` call.
-        """
+        """May only be written to or read between a `recv_draw` call from the process and a `write_next` or `abort` call."""
         if not self._readable:
             raise RuntimeError()
         return self._point
@@ -363,8 +364,8 @@ class ProcessAdapter:
                     raise multiprocessing.TimeoutError()
                 process.join(timeout)
         except multiprocessing.TimeoutError:
-            logger.warn(
-                "Chain processes did not terminate as expected. " "Terminating forcefully..."
+            logger.warning(
+                "Chain processes did not terminate as expected. Terminating forcefully..."
             )
             for process in processes:
                 process.terminate()
@@ -460,6 +461,7 @@ class ParallelSampler:
             self._active.append(proc)
 
     def __iter__(self):
+        """Return an iterator over draws."""
         if not self._in_context:
             raise ValueError("Use ParallelSampler as context manager.")
         self._make_active()
@@ -504,10 +506,12 @@ class ParallelSampler:
                 yield Draw(proc.chain, is_last, draw, tuning, stats, point)
 
     def __enter__(self):
+        """Enter the context manager."""
         self._in_context = True
         return self
 
     def __exit__(self, *args):
+        """Exit the context manager."""
         ProcessAdapter.terminate_all(self._samplers)
 
 

@@ -31,8 +31,10 @@ TensorLike = np.ndarray | pt.TensorVariable
 
 
 def set_boundary(X: TensorLike, c: numbers.Real | TensorLike) -> np.ndarray:
-    """Set the boundary using `X` and `c`.  `X` can be centered around zero but doesn't have to be,
-    and `c` is usually a scalar multiplier greater than 1.0, but it may also be one value per
+    """Set the boundary using `X` and `c`.
+
+    `X` can be centered around zero but doesn't have to be, and `c` is usually
+    a scalar multiplier greater than 1.0, but it may also be one value per
     dimension or column of `X`.
     """
     # compute radius. Works whether X is 0-centered or not
@@ -44,7 +46,6 @@ def set_boundary(X: TensorLike, c: numbers.Real | TensorLike) -> np.ndarray:
 
 def calc_eigenvalues(L: TensorLike, m: Sequence[int]):
     """Calculate eigenvalues of the Laplacian."""
-
     S = np.meshgrid(*[np.arange(1, 1 + m[d]) for d in range(len(m))])
     S_arr = np.vstack([s.flatten() for s in S]).T
 
@@ -57,8 +58,9 @@ def calc_eigenvectors(
     eigvals: TensorLike,
     m: Sequence[int],
 ):
-    """Calculate eigenvectors of the Laplacian. These are used as basis vectors in the HSGP
-    approximation.
+    """Calculate eigenvectors of the Laplacian.
+
+    These are used as basis vectors in the HSGP approximation.
     """
     m_star = int(np.prod(m))
 
@@ -80,6 +82,7 @@ def calc_basis_periodic(
 ):
     """
     Calculate basis vectors for the cosine series expansion of the periodic covariance function.
+
     These are derived from the Taylor series representation of the covariance.
     """
     w0 = (2 * np.pi) / period  # angular frequency defining the periodicity
@@ -94,8 +97,7 @@ def calc_basis_periodic(
 def approx_hsgp_hyperparams(
     x_range: list[float], lengthscale_range: list[float], cov_func: str
 ) -> tuple[int, float]:
-    """Utility function that uses heuristics to recommend minimum `m` and `c` values,
-    based on recommendations from Ruitort-Mayol et. al.
+    """Use heuristics to recommend minimum `m` and `c` values, based on recommendations from Ruitort-Mayol et. al.
 
     In practice, you need to choose `c` large enough to handle the largest lengthscales,
     and `m` large enough to accommodate the smallest lengthscales.  Use your prior on the
@@ -311,6 +313,7 @@ class HSGP(Base):
         super().__init__(mean_func=mean_func, cov_func=cov_func)
 
     def __add__(self, other):
+        """Add two HSGPs."""
         raise NotImplementedError("Additive HSGPs aren't supported.")
 
     @property
@@ -324,14 +327,18 @@ class HSGP(Base):
         self._L = pt.as_tensor_variable(value)
 
     def prior_linearized(self, X: TensorLike):
-        """Linearized version of the HSGP.  Returns the Laplace eigenfunctions and the square root
+        """Linearized version of the HSGP.
+
+        Returns the Laplace eigenfunctions and the square root
         of the power spectral density needed to create the GP.
 
-        This function allows the user to bypass the GP interface and work with the basis
-        and coefficients directly.  This format allows the user to create predictions using
-        `pm.set_data` similarly to a linear model.  It also enables computational speed ups in
-        multi-GP models, since they may share the same basis.  The return values are the Laplace
-        eigenfunctions `phi`, and the square root of the power spectral density.
+        This function allows the user to bypass the GP interface and work with
+        the basis and coefficients directly.  This format allows the user to
+        create predictions using `pm.set_data` similarly to a linear model.  It
+        also enables computational speed ups in multi-GP models, since they may
+        share the same basis.  The return values are the Laplace eigenfunctions
+        `phi`, and the square root of the power spectral density.
+
         An example is given below.
 
         Parameters
@@ -425,9 +432,10 @@ class HSGP(Base):
         gp_dims: str | None = None,
         *args,
         **kwargs,
-    ):  # type: ignore
+    ):
         R"""
-        Returns the (approximate) GP prior distribution evaluated over the input locations `X`.
+        Return the (approximate) GP prior distribution evaluated over the input locations `X`.
+
         For usage examples, refer to `pm.gp.Latent`.
 
         Parameters
@@ -488,10 +496,9 @@ class HSGP(Base):
         elif self._parametrization == "centered":
             return self.mean_func(Xnew) + phi[:, i:] @ beta
 
-    def conditional(self, name: str, Xnew: TensorLike, dims: str | None = None):  # type: ignore
+    def conditional(self, name: str, Xnew: TensorLike, dims: str | None = None):  # type: ignore[override]
         R"""
-        Returns the (approximate) conditional distribution evaluated over new input locations
-        `Xnew`.
+        Return the (approximate) conditional distribution evaluated over new input locations `Xnew`.
 
         Parameters
         ----------
@@ -600,16 +607,21 @@ class HSGPPeriodic(Base):
         super().__init__(mean_func=mean_func, cov_func=cov_func)
 
     def prior_linearized(self, X: TensorLike):
-        """Linearized version of the approximation. Returns the cosine and sine bases and coefficients
+        """Linearized version of the approximation.
+
+        Returns the cosine and sine bases and coefficients
         of the expansion needed to create the GP.
 
-        This function allows the user to bypass the GP interface and work directly with the basis
-        and coefficients directly.  This format allows the user to create predictions using
-        `pm.set_data` similarly to a linear model.  It also enables computational speed ups in
-        multi-GP models since they may share the same basis.
+        This function allows the user to bypass the GP interface and work
+        directly with the basis and coefficients directly.  This format allows
+        the user to create predictions using `pm.set_data` similarly to a linear
+        model.  It also enables computational speed ups in multi-GP models since
+        they may share the same basis.
 
-        Correct results when using `prior_linearized` in tandem with `pm.set_data` and
-        `pm.MutableData` require that the `Xs` are zero-centered, so it's mean must be subtracted.
+        Correct results when using `prior_linearized` in tandem with
+        `pm.set_data` and `pm.MutableData` require that the `Xs` are
+        zero-centered, so its mean must be subtracted.
+
         An example is given below.
 
         Parameters
@@ -683,9 +695,10 @@ class HSGPPeriodic(Base):
         psd = self.scale * self.cov_func.power_spectral_density_approx(J)
         return (phi_cos, phi_sin), psd
 
-    def prior(self, name: str, X: TensorLike, dims: str | None = None):  # type: ignore
+    def prior(self, name: str, X: TensorLike, dims: str | None = None):  # type: ignore[override]
         R"""
-        Returns the (approximate) GP prior distribution evaluated over the input locations `X`.
+        Return the (approximate) GP prior distribution evaluated over the input locations `X`.
+
         For usage examples, refer to `pm.gp.Latent`.
 
         Parameters
@@ -705,8 +718,8 @@ class HSGPPeriodic(Base):
         # and so does not contribute to the approximation.
         f = (
             self.mean_func(X)
-            + phi_cos @ (psd * self._beta[:m])  # type: ignore
-            + phi_sin[..., 1:] @ (psd[1:] * self._beta[m:])  # type: ignore
+            + phi_cos @ (psd * self._beta[:m])  # type: ignore[index]
+            + phi_sin[..., 1:] @ (psd[1:] * self._beta[m:])  # type: ignore[index]
         )
 
         self.f = pm.Deterministic(name, f, dims=dims)
@@ -734,10 +747,9 @@ class HSGPPeriodic(Base):
         phi = phi_cos @ (psd * beta[:m]) + phi_sin[..., 1:] @ (psd[1:] * beta[m:])
         return self.mean_func(Xnew) + phi
 
-    def conditional(self, name: str, Xnew: TensorLike, dims: str | None = None):  # type: ignore
+    def conditional(self, name: str, Xnew: TensorLike, dims: str | None = None):  # type: ignore[override]
         R"""
-        Returns the (approximate) conditional distribution evaluated over new input locations
-        `Xnew`.
+        Return the (approximate) conditional distribution evaluated over new input locations `Xnew`.
 
         Parameters
         ----------

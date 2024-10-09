@@ -117,7 +117,7 @@ NodeFormatter = Callable[[TensorVariable], GraphvizNodeKwargs]
 
 
 def default_potential(var: TensorVariable) -> GraphvizNodeKwargs:
-    """Default data for potential in the graph."""
+    """Return default data for potential in the graph."""
     return {
         "shape": "octagon",
         "style": "filled",
@@ -136,7 +136,7 @@ def random_variable_symbol(var: TensorVariable) -> str:
 
 
 def default_free_rv(var: TensorVariable) -> GraphvizNodeKwargs:
-    """Default data for free RV in the graph."""
+    """Return default data for free RV in the graph."""
     symbol = random_variable_symbol(var)
 
     return {
@@ -147,7 +147,7 @@ def default_free_rv(var: TensorVariable) -> GraphvizNodeKwargs:
 
 
 def default_observed_rv(var: TensorVariable) -> GraphvizNodeKwargs:
-    """Default data for observed RV in the graph."""
+    """Return default data for observed RV in the graph."""
     symbol = random_variable_symbol(var)
 
     return {
@@ -158,7 +158,7 @@ def default_observed_rv(var: TensorVariable) -> GraphvizNodeKwargs:
 
 
 def default_deterministic(var: TensorVariable) -> GraphvizNodeKwargs:
-    """Default data for the deterministic in the graph."""
+    """Return default data for the deterministic in the graph."""
     return {
         "shape": "box",
         "style": None,
@@ -167,7 +167,7 @@ def default_deterministic(var: TensorVariable) -> GraphvizNodeKwargs:
 
 
 def default_data(var: TensorVariable) -> GraphvizNodeKwargs:
-    """Default data for the data in the graph."""
+    """Return default data for the data in the graph."""
     return {
         "shape": "box",
         "style": "rounded, filled",
@@ -226,7 +226,7 @@ def _make_node(
     cluster: str | None = None,
     formatting: str = "plain",
 ):
-    """Attaches the given variable to a graphviz or networkx Digraph"""
+    """Attaches the given variable to a graphviz or networkx Digraph."""
     node_formatter = node_formatters[node.node_type]
     kwargs = node_formatter(node.var)
 
@@ -234,7 +234,7 @@ def _make_node(
         kwargs["cluster"] = cluster
 
     var_name: str = cast(str, node.var.name)
-    add_node(var_name.replace(":", "&"), **kwargs)  # type: ignore
+    add_node(var_name.replace(":", "&"), **kwargs)  # type: ignore[call-arg]
 
 
 class ModelGraph:
@@ -311,7 +311,7 @@ class ModelGraph:
     def make_compute_graph(
         self, var_names: Iterable[VarName] | None = None
     ) -> dict[VarName, set[VarName]]:
-        """Get map of var_name -> set(input var names) for the model"""
+        """Get map of var_name -> set(input var names) for the model."""
         input_map: dict[VarName, set[VarName]] = defaultdict(set)
 
         for var_name in self.vars_to_plot(var_names):
@@ -441,7 +441,7 @@ def make_graph(
     node_formatters: NodeTypeFormatterMapping | None = None,
     create_plate_label: PlateLabelFunc = create_plate_label_with_dim_length,
 ):
-    """Make graphviz Digraph of PyMC model
+    """Make graphviz Digraph of PyMC model.
 
     Returns
     -------
@@ -511,7 +511,7 @@ def make_networkx(
     node_formatters: NodeTypeFormatterMapping | None = None,
     create_plate_label: PlateLabelFunc = create_plate_label_with_dim_length,
 ):
-    """Make networkx Digraph of PyMC model
+    """Make networkx Digraph of PyMC model.
 
     Returns
     -------

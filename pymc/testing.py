@@ -68,7 +68,7 @@ def product(domains, n_samples=-1):
                  must be "domain-like", as in, have a `.vals` property
         n_samples: int, maximum samples to return.  -1 to return whole product
 
-    Returns:
+    Returns
     -------
         list of the cartesian product of the domains
     """
@@ -114,6 +114,7 @@ class Domain:
         self.dtype = dtype
 
     def __add__(self, other):
+        """Add two domains."""
         return Domain(
             [v + other for v in self.vals],
             self.dtype,
@@ -122,6 +123,7 @@ class Domain:
         )
 
     def __mul__(self, other):
+        """Multiply two domains."""
         try:
             return Domain(
                 [v * other for v in self.vals],
@@ -138,6 +140,7 @@ class Domain:
             )
 
     def __neg__(self):
+        """Negate one domain."""
         return Domain([-v for v in self.vals], self.dtype, (-self.lower, -self.upper), self.shape)
 
 
@@ -214,7 +217,7 @@ Runif = Domain([-np.inf, -0.4, 0, 0.4, np.inf])
 Rdunif = Domain([-np.inf, -1, 0, 1, np.inf], "int64")
 Rplusunif = Domain([0, 0.5, np.inf])
 Rplusdunif = Domain([0, 10, np.inf], "int64")
-I = Domain([-np.inf, -3, -2, -1, 0, 1, 2, 3, np.inf], "int64")  # noqa E741
+I = Domain([-np.inf, -3, -2, -1, 0, 1, 2, 3, np.inf], "int64")  # noqa: E741
 NatSmall = Domain([0, 3, 4, 5, np.inf], "int64")
 Nat = Domain([0, 1, 2, 3, np.inf], "int64")
 NatBig = Domain([0, 1, 2, 3, 5000, np.inf], "int64")
@@ -223,7 +226,7 @@ Bool = Domain([0, 0, 1, 1], "int64")
 
 
 def select_by_precision(float64, float32):
-    """Helper function to choose reasonable decimal cutoffs for different floatX modes."""
+    """Choose reasonable decimal cutoffs for different floatX modes."""
     decimal = float64 if pytensor.config.floatX == "float64" else float32
     return decimal
 
@@ -311,10 +314,8 @@ def check_logp(
     skip_paramdomain_outside_edge_test: bool = False,
 ) -> None:
     """
-    Generic test for PyMC logp methods
+    Test PyMC logp and equivalent scipy logpmf/logpdf methods give similar results for valid values and parameters inside the supported edges.
 
-    Test PyMC logp and equivalent scipy logpmf/logpdf methods give similar
-    results for valid values and parameters inside the supported edges.
     Edges are excluded by default, but can be artificially included by
     creating a domain with repeated values (e.g., `Domain([0, 0, .5, 1, 1]`)
 
@@ -421,7 +422,7 @@ def check_logcdf(
     skip_paramdomain_outside_edge_test: bool = False,
 ) -> None:
     """
-    Generic test for PyMC logcdf methods
+    Test PyMC logcdf and equivalent scipy logcdf methods give similar results for valid values and parameters inside the supported edges.
 
     The following tests are performed by default:
         1. Test PyMC logcdf and equivalent scipy logcdf methods give similar
@@ -536,7 +537,7 @@ def check_icdf(
     n_samples: int = 100,
 ) -> None:
     """
-    Generic test for PyMC icdf methods
+    Test PyMC icdf and equivalent scipy icdf methods give similar results for valid values and parameters inside the supported edges.
 
     The following tests are performed by default:
         1. Test PyMC icdf and equivalent scipy icdf (ppf) methods give similar
@@ -633,9 +634,7 @@ def check_selfconsistency_discrete_logcdf(
     decimal: int | None = None,
     n_samples: int = 100,
 ) -> None:
-    """
-    Check that logcdf of discrete distributions matches sum of logps up to value.
-    """
+    """Check that logcdf of discrete distributions matches sum of logps up to value."""
     if decimal is None:
         decimal = select_by_precision(float64=6, float32=3)
 
@@ -796,8 +795,9 @@ def discrete_random_tester(
 
 class BaseTestDistributionRandom:
     """
-    Base class for tests that new RandomVariables are correctly
-    implemented, and that the mapping of parameters between the PyMC
+    Base class for tests that new RandomVariables are correctly implemented.
+
+    Also checks that the mapping of parameters between the PyMC
     Distribution and the respective RandomVariable is correct.
 
     Three default tests are provided which check:
@@ -979,7 +979,6 @@ def seeded_numpy_distribution_builder(dist_name: str) -> Callable:
 
 def assert_no_rvs(vars: Sequence[Variable]) -> None:
     """Assert that there are no `MeasurableOp` nodes in a graph."""
-
     rvs = rvs_in_graph(vars)
     if rvs:
         raise AssertionError(f"RV found in graph: {rvs}")

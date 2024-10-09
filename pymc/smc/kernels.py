@@ -161,7 +161,6 @@ class SMC_KERNEL(ABC):
             Dictionary that contains information about model variables shape and size.
 
         """
-
         self.draws = draws
         self.start = start
         if threshold < 0 or threshold > 1:
@@ -187,7 +186,7 @@ class SMC_KERNEL(ABC):
         self.weights = np.ones(self.draws) / self.draws
 
     def initialize_population(self) -> dict[str, np.ndarray]:
-        """Create an initial population from the prior distribution"""
+        """Create an initial population from the prior distribution."""
         sys.stdout.write(" ")  # see issue #5828
         with warnings.catch_warnings():
             warnings.filterwarnings(
@@ -213,7 +212,7 @@ class SMC_KERNEL(ABC):
         return cast(dict[str, np.ndarray], dict_prior)
 
     def _initialize_kernel(self):
-        """Create variables and logp function necessary to run SMC kernel
+        """Create variables and logp function necessary to run SMC kernel.
 
         This method should not be overwritten. If needed, use `setup_kernel`
         instead.
@@ -253,11 +252,11 @@ class SMC_KERNEL(ABC):
         self.likelihood_logp = np.array(likelihoods).squeeze()
 
     def setup_kernel(self):
-        """Setup logic performed once before sampling starts"""
+        """Perform setup logic once before sampling starts."""
         pass
 
     def update_beta_and_weights(self):
-        """Calculate the next inverse temperature (beta)
+        """Calculate the next inverse temperature (beta).
 
         The importance weights based on two successive tempered likelihoods (i.e.
         two successive values of beta) and updates the marginal likelihood estimate.
@@ -294,7 +293,7 @@ class SMC_KERNEL(ABC):
         self.log_marginal_likelihood += logsumexp(log_weights_un) - np.log(self.draws)
 
     def resample(self):
-        """Resample particles based on importance weights"""
+        """Resample particles based on importance weights."""
         self.resampling_indexes = systematic_resampling(self.weights, self.rng)
 
         self.tempered_posterior = self.tempered_posterior[self.resampling_indexes]
@@ -304,16 +303,16 @@ class SMC_KERNEL(ABC):
         self.tempered_posterior_logp = self.prior_logp + self.likelihood_logp * self.beta
 
     def tune(self):
-        """Tuning logic performed before every mutation step"""
+        """Tuning logic performed before every mutation step."""
         pass
 
     @abc.abstractmethod
     def mutate(self):
-        """Apply kernel-specific perturbation to the particles once per stage"""
+        """Apply kernel-specific perturbation to the particles once per stage."""
         pass
 
     def sample_stats(self) -> SMCStats:
-        """Stats to be saved at the end of each stage
+        """Stats to be saved at the end of each stage.
 
         These stats will be saved under `sample_stats` in the final InferenceData object.
         """
@@ -334,7 +333,7 @@ class SMC_KERNEL(ABC):
         }
 
     def _posterior_to_trace(self, chain=0) -> NDArray:
-        """Save results into a PyMC trace
+        """Save results into a PyMC trace.
 
         This method should not be overwritten.
         """
@@ -356,15 +355,17 @@ class SMC_KERNEL(ABC):
                     var_samples = np.round(var_samples).astype(var.dtype)
                 value.append(var_samples.reshape(shape))
                 size += new_size
-            strace.record(point={k: v for k, v in zip(varnames, value)})
+            strace.record(point=dict(zip(varnames, value)))
         return strace
 
 
 class IMH(SMC_KERNEL):
-    """Independent Metropolis-Hastings SMC_kernel"""
+    """Independent Metropolis-Hastings SMC_kernel."""
 
     def __init__(self, *args, correlation_threshold=0.01, **kwargs):
         """
+        Create the Independent Metropolis-Hastings SMC kernel object.
+
         Parameters
         ----------
         correlation_threshold : float, default 0.01
@@ -467,10 +468,12 @@ class Pearson:
 
 
 class MH(SMC_KERNEL):
-    """Metropolis-Hastings SMC_kernel"""
+    """Metropolis-Hastings SMC_kernel."""
 
     def __init__(self, *args, correlation_threshold=0.01, **kwargs):
         """
+        Create a Metropolis-Hastings SMC kernel.
+
         Parameters
         ----------
         correlation_threshold : float, default 0.01
@@ -490,7 +493,8 @@ class MH(SMC_KERNEL):
 
     def setup_kernel(self):
         """Proposal dist is just a Multivariate Normal with unit identity covariance.
-        Dimension specific scaling is provided by `self.proposal_scales` and set in `self.tune()`
+
+        Dimension specific scaling is provided by `self.proposal_scales` and set in `self.tune()`.
         """
         ndim = self.tempered_posterior.shape[1]
         self.proposal_scales = np.full(self.draws, min(1, 2.38**2 / ndim))
@@ -502,7 +506,7 @@ class MH(SMC_KERNEL):
             self.chain_acc_rate = self.chain_acc_rate[self.resampling_indexes]
 
     def tune(self):
-        """Update proposal scales for each particle dimension and update number of MH steps"""
+        """Update proposal scales for each particle dimension and update number of MH steps."""
         if self.iteration > 1:
             # Rescale based on distance to 0.234 acceptance rate
             chain_scales = np.exp(np.log(self.proposal_scales) + (self.chain_acc_rate - 0.234))
@@ -614,7 +618,6 @@ def _logp_forw(point, out_vars, in_vars, shared):
     shared : list
         Containing TensorVariable for depended shared data
     """
-
     # Replace integer inputs with rounded float inputs
     if any(var.dtype in discrete_types for var in in_vars):
         replace_int_input = {}

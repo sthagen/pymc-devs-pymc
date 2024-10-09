@@ -150,7 +150,6 @@ def sample_smc(
         `link <http://ascelibrary.org/doi/abs/10.1061/%28ASCE%290733-9399
         %282007%29133:7%28816%29>`__
     """
-
     if isinstance(kernel, str) and kernel.lower() in ("abc", "metropolis"):
         warnings.warn(
             f'The kernel string argument "{kernel}" in sample_smc has been deprecated. '
@@ -293,7 +292,7 @@ def _save_sample_stats(
             library=pymc,
         )
 
-        ikwargs: dict[str, Any] = dict(model=model)
+        ikwargs: dict[str, Any] = {"model": model}
         if idata_kwargs is not None:
             ikwargs.update(idata_kwargs)
         idata = to_inference_data(trace, **ikwargs)

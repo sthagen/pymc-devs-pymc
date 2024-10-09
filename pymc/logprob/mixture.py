@@ -244,7 +244,6 @@ def get_stack_mixture_vars(
     node: Apply,
 ) -> tuple[list[TensorVariable] | None, int | None]:
     r"""Extract the mixture terms from a `*Subtensor*` applied to stacked `MeasurableVariable`\s."""
-
     assert isinstance(node.op, subtensor_ops)
 
     joined_rvs = node.inputs[0]
@@ -506,7 +505,7 @@ def split_valued_ifelse(fgraph, node):
     replacements = {first_valued_out: first_valued_ifelse}
 
     if remaining_vars:
-        first_ifelse_ancestors = set(a for a in ancestors((first_then, first_else)) if a.owner)
+        first_ifelse_ancestors = {a for a in ancestors((first_then, first_else)) if a.owner}
         remaining_thens = [then_out for (then_out, _, _, _) in remaining_vars]
         remaininng_elses = [else_out for (_, else_out, _, _) in remaining_vars]
         if set(remaining_thens + remaininng_elses) & first_ifelse_ancestors:

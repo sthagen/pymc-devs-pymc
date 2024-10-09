@@ -80,7 +80,6 @@ def replace_rvs_by_values(
     rvs_to_transforms, optional
         Mapping between the original graph RVs and respective value transforms
     """
-
     if rvs_to_transforms:
         # Conditional transforms like Interval can reference variables in the original RV graph
         # To avoid mutating the original graphs in place, we have to clone them
@@ -200,7 +199,7 @@ def check_potential_measurability(inputs: Iterable[TensorVariable]) -> bool:
 
 
 class ParameterValueError(ValueError):
-    """Exception for invalid parameters values in logprob graphs"""
+    """Exception for invalid parameters values in logprob graphs."""
 
 
 class CheckParameterValue(CheckAndRaise):
@@ -216,12 +215,13 @@ class CheckParameterValue(CheckAndRaise):
         self.can_be_replaced_by_ninf = can_be_replaced_by_ninf
 
     def __str__(self):
+        """Return a string representation of the object."""
         return f"Check{{{self.msg}}}"
 
 
 @node_rewriter(tracks=[CheckParameterValue])
 def local_remove_check_parameter(fgraph, node):
-    """Rewrite that removes CheckParameterValue
+    """Rewrite that removes CheckParameterValue.
 
     This is used when compile_rv_inplace
     """
@@ -302,7 +302,6 @@ def diracdelta_logprob(op, values, *inputs, **kwargs):
 
 def find_negated_var(var):
     """Return a variable that is being multiplied by -1 or None otherwise."""
-
     if not (
         var.owner and isinstance(var.owner.op, Elemwise) and isinstance(var.owner.op.scalar_op, Mul)
     ):

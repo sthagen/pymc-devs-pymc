@@ -53,7 +53,7 @@ BASE_URL = "https://raw.githubusercontent.com/pymc-devs/pymc-examples/main/examp
 
 
 def get_data(filename):
-    """Returns a BytesIO object for a package data file.
+    """Return a BytesIO object for a package data file.
 
     Parameters
     ----------
@@ -87,9 +87,9 @@ class GenTensorVariable(TensorVariable):
 
 
 class GeneratorAdapter:
-    """
-    Helper class that helps to infer data type of generator with looking
-    at the first item, preserving the order of the resulting generator
+    """Class that helps infer data type of generator.
+
+    It looks at the first item, preserving the order of the resulting generator.
     """
 
     def make_variable(self, gop, name=None):
@@ -108,6 +108,7 @@ class GeneratorAdapter:
 
     # python3 generator
     def __next__(self):
+        """Next value in the generator."""
         if not self._yielded_test_value:
             self._yielded_test_value = True
             return self.test_value
@@ -118,12 +119,15 @@ class GeneratorAdapter:
     next = __next__
 
     def __iter__(self):
+        """Return an iterator."""
         return self
 
     def __eq__(self, other):
+        """Return true if both objects are actually the same."""
         return id(self) == id(other)
 
     def __hash__(self):
+        """Return a hash of the object."""
         return hash(id(self))
 
 
@@ -135,7 +139,7 @@ minibatch_index = MinibatchIndexRV()
 
 
 class MinibatchOp(OpFromGraph):
-    """Encapsulate Minibatch random draws in an opaque OFG"""
+    """Encapsulate Minibatch random draws in an opaque OFG."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs, inline=True)
@@ -186,7 +190,6 @@ def Minibatch(variable: TensorVariable, *variables: TensorVariable, batch_size: 
     >>> data2 = np.random.randn(100, 20)
     >>> mdata1, mdata2 = Minibatch(data1, data2, batch_size=10)
     """
-
     if not isinstance(batch_size, int):
         raise TypeError("batch_size must be an integer")
 
@@ -221,7 +224,7 @@ def determine_coords(
     dims: Sequence[str | None] | None = None,
     coords: dict[str, Sequence | np.ndarray] | None = None,
 ) -> tuple[dict[str, Sequence | np.ndarray], Sequence[str | None]]:
-    """Determines coordinate values from data or the model (via ``dims``)."""
+    """Determine coordinate values from data or the model (via ``dims``)."""
     if coords is None:
         coords = {}
 
@@ -340,7 +343,7 @@ def Data(
     mutable: bool | None = None,
     **kwargs,
 ) -> SharedVariable | TensorConstant:
-    """Data container that registers a data variable with the model.
+    """Create a data container that registers a data variable with the model.
 
     Depending on the ``mutable`` setting (default: True), the variable
     is registered as a :class:`~pytensor.compile.sharedvalue.SharedVariable`,

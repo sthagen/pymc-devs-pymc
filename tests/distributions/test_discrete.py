@@ -483,7 +483,7 @@ class TestMatchesScipy:
 
 
 # TODO: Is this test working as expected / still relevant?
-@pytest.mark.parametrize("shape", [tuple(), (1,), (3, 1), (3, 2)], ids=str)
+@pytest.mark.parametrize("shape", [(), (1,), (3, 1), (3, 2)], ids=str)
 def test_orderedlogistic_dimensions(shape):
     # Test for issue #3535
     loge = np.log10(np.exp(1))
@@ -853,7 +853,7 @@ class TestDiscreteUniform(BaseTestDistributionRandom):
     pymc_dist_params = {"lower": -1, "upper": 9}
     expected_rv_op_params = {"lower": -1, "upper": 9}
     reference_dist_params = {"lower": -1, "upper": 9}
-    reference_dist = lambda self: ft.partial(  # noqa E731
+    reference_dist = lambda self: ft.partial(  # noqa: E731
         self.discrete_uniform_rng_fn, rng=self.get_random_state()
     )
     checks_to_run = [

@@ -37,9 +37,11 @@ __all__ = [
 def str_for_dist(
     dist: TensorVariable, formatting: str = "plain", include_params: bool = True
 ) -> str:
-    """Make a human-readable string representation of a Distribution in a model, either
-    LaTeX or plain, optionally with distribution parameter values included."""
+    """Make a human-readable string representation of a Distribution in a model.
 
+    This can be either LaTeX or plain, optionally with distribution parameter
+    values included.
+    """
     if include_params:
         if isinstance(dist.owner.op, RandomVariable) or getattr(
             dist.owner.op, "extended_signature", None
@@ -98,9 +100,11 @@ def str_for_dist(
 
 
 def str_for_model(model: Model, formatting: str = "plain", include_params: bool = True) -> str:
-    """Make a human-readable string representation of Model, listing all random variables
-    and their distributions, optionally including parameter values."""
+    """Make a human-readable string representation of Model.
 
+    This lists all random variables and their distributions, optionally
+    including parameter values.
+    """
     # Wrap functions to avoid confusing typecheckers
     sfd = partial(str_for_dist, formatting=formatting, include_params=include_params)
     sfp = partial(
@@ -146,8 +150,11 @@ def str_for_potential_or_deterministic(
     include_params: bool = True,
     dist_name: str = "Deterministic",
 ) -> str:
-    """Make a human-readable string representation of a Deterministic or Potential in a model, either
-    LaTeX or plain, optionally with distribution parameter values included."""
+    """Make a human-readable string representation of a Deterministic or Potential in a model.
+
+    This can be either LaTeX or plain, optionally with distribution parameter
+    values included.
+    """
     print_name = var.name if var.name is not None else "<unnamed>"
     if "latex" in formatting:
         print_name = r"\text{" + _latex_escape(print_name.strip("$")) + "}"
@@ -302,7 +309,5 @@ except (ModuleNotFoundError, AttributeError):
 
 
 def _format_underscore(variable: str) -> str:
-    """
-    Escapes all unescaped underscores in the variable name for LaTeX representation.
-    """
+    """Escapes all unescaped underscores in the variable name for LaTeX representation."""
     return re.sub(r"(?<!\\)_", r"\\_", variable)
