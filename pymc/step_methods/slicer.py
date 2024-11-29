@@ -18,6 +18,7 @@
 import numpy as np
 
 from pymc.blocking import RaveledVars, StatsType
+from pymc.initial_point import PointType
 from pymc.model import modelcontext
 from pymc.pytensorf import compile_pymc, join_nonshared_inputs, make_shared_replacements
 from pymc.step_methods.arraystep import ArrayStepShared
@@ -76,7 +77,17 @@ class Slice(ArrayStepShared):
     _state_class = SliceState
 
     def __init__(
-        self, vars=None, w=1.0, tune=True, model=None, iter_limit=np.inf, rng=None, **kwargs
+        self,
+        vars=None,
+        *,
+        w=1.0,
+        tune=True,
+        model=None,
+        iter_limit=np.inf,
+        rng=None,
+        initial_point: PointType | None = None,
+        compile_kwargs: dict | None = None,
+        blocked: bool = False,  # Could be true since tuning is independent across dims?
     ):
         model = modelcontext(model)
         self.w = np.asarray(w).copy()
@@ -89,15 +100,19 @@ class Slice(ArrayStepShared):
         else:
             vars = get_value_vars_from_user_vars(vars, model)
 
-        point = model.initial_point()
-        shared = make_shared_replacements(point, vars, model)
+        if initial_point is None:
+            initial_point = model.initial_point()
+
+        shared = make_shared_replacements(initial_point, vars, model)
         [logp], raveled_inp = join_nonshared_inputs(
-            point=point, outputs=[model.logp()], inputs=vars, shared_inputs=shared
+            point=initial_point, outputs=[model.logp()], inputs=vars, shared_inputs=shared
         )
-        self.logp = compile_pymc([raveled_inp], logp)
+        if compile_kwargs is None:
+            compile_kwargs = {}
+        self.logp = compile_pymc([raveled_inp], logp, **compile_kwargs)
         self.logp.trust_input = True
 
-        super().__init__(vars, shared, rng=rng)
+        super().__init__(vars, shared, blocked=blocked, rng=rng)
 
     def astep(self, apoint: RaveledVars) -> tuple[RaveledVars, StatsType]:
         # The arguments are determined by the list passed via `super().__init__(..., fs, ...)`

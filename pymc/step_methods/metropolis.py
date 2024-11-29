@@ -28,6 +28,7 @@ from pytensor.tensor.random.basic import BernoulliRV, CategoricalRV
 import pymc as pm
 
 from pymc.blocking import DictToArrayBijection, RaveledVars
+from pymc.initial_point import PointType
 from pymc.pytensorf import (
     CallableTensor,
     compile_pymc,
@@ -151,6 +152,7 @@ class Metropolis(ArrayStepShared):
     def __init__(
         self,
         vars=None,
+        *,
         S=None,
         proposal_dist=None,
         scaling=1.0,
@@ -159,7 +161,9 @@ class Metropolis(ArrayStepShared):
         model=None,
         mode=None,
         rng=None,
-        **kwargs,
+        initial_point: PointType | None = None,
+        compile_kwargs: dict | None = None,
+        blocked: bool = False,
     ):
         """Create an instance of a Metropolis stepper.
 
@@ -188,14 +192,15 @@ class Metropolis(ArrayStepShared):
             :py:func:`pymc.util.get_random_generator` for more information.
         """
         model = pm.modelcontext(model)
-        initial_values = model.initial_point()
+        if initial_point is None:
+            initial_point = model.initial_point()
 
         if vars is None:
             vars = model.value_vars
         else:
             vars = get_value_vars_from_user_vars(vars, model)
 
-        initial_values_shape = [initial_values[v.name].shape for v in vars]
+        initial_values_shape = [initial_point[v.name].shape for v in vars]
         if S is None:
             S = np.ones(int(sum(np.prod(ivs) for ivs in initial_values_shape)))
 
@@ -215,7 +220,7 @@ class Metropolis(ArrayStepShared):
 
         # Determine type of variables
         self.discrete = np.concatenate(
-            [[v.dtype in pm.discrete_types] * (initial_values[v.name].size or 1) for v in vars]
+            [[v.dtype in pm.discrete_types] * (initial_point[v.name].size or 1) for v in vars]
         )
         self.any_discrete = self.discrete.any()
         self.all_discrete = self.discrete.all()
@@ -249,9 +254,9 @@ class Metropolis(ArrayStepShared):
         # TODO: This is not being used when compiling the logp function!
         self.mode = mode
 
-        shared = pm.make_shared_replacements(initial_values, vars, model)
-        self.delta_logp = delta_logp(initial_values, model.logp(), vars, shared)
-        super().__init__(vars, shared, rng=rng)
+        shared = pm.make_shared_replacements(initial_point, vars, model)
+        self.delta_logp = delta_logp(initial_point, model.logp(), vars, shared, compile_kwargs)
+        super().__init__(vars, shared, blocked=blocked, rng=rng)
 
     def reset_tuning(self):
         """Reset the tuned sampler parameters to their initial values."""
@@ -418,7 +423,19 @@ class BinaryMetropolis(ArrayStep):
 
     _state_class = BinaryMetropolisState
 
-    def __init__(self, vars, scaling=1.0, tune=True, tune_interval=100, model=None, rng=None):
+    def __init__(
+        self,
+        vars,
+        *,
+        scaling=1.0,
+        tune=True,
+        tune_interval=100,
+        model=None,
+        rng=None,
+        initial_point: PointType | None = None,
+        compile_kwargs: dict | None = None,
+        blocked: bool = True,
+    ):
         model = pm.modelcontext(model)
 
         self.scaling = scaling
@@ -432,7 +449,9 @@ class BinaryMetropolis(ArrayStep):
         if not all(v.dtype in pm.discrete_types for v in vars):
             raise ValueError("All variables must be Bernoulli for BinaryMetropolis")
 
-        super().__init__(vars, [model.compile_logp()], rng=rng)
+        if compile_kwargs is None:
+            compile_kwargs = {}
+        super().__init__(vars, [model.compile_logp(**compile_kwargs)], blocked=blocked, rng=rng)
 
     def astep(self, apoint: RaveledVars, *args) -> tuple[RaveledVars, StatsType]:
         logp = args[0]
@@ -530,7 +549,18 @@ class BinaryGibbsMetropolis(ArrayStep):
 
     _state_class = BinaryGibbsMetropolisState
 
-    def __init__(self, vars, order="random", transit_p=0.8, model=None, rng=None):
+    def __init__(
+        self,
+        vars,
+        *,
+        order="random",
+        transit_p=0.8,
+        model=None,
+        rng=None,
+        initial_point: PointType | None = None,
+        compile_kwargs: dict | None = None,
+        blocked: bool = True,
+    ):
         model = pm.modelcontext(model)
 
         # Doesn't actually tune, but it's required to emit a sampler stat
@@ -541,7 +571,8 @@ class BinaryGibbsMetropolis(ArrayStep):
 
         vars = get_value_vars_from_user_vars(vars, model)
 
-        initial_point = model.initial_point()
+        if initial_point is None:
+            initial_point = model.initial_point()
         self.dim = sum(initial_point[v.name].size for v in vars)
 
         if order == "random":
@@ -556,7 +587,10 @@ class BinaryGibbsMetropolis(ArrayStep):
         if not all(v.dtype in pm.discrete_types for v in vars):
             raise ValueError("All variables must be binary for BinaryGibbsMetropolis")
 
-        super().__init__(vars, [model.compile_logp()], rng=rng)
+        if compile_kwargs is None:
+            compile_kwargs = {}
+
+        super().__init__(vars, [model.compile_logp(**compile_kwargs)], blocked=blocked, rng=rng)
 
     def reset_tuning(self):
         # There are no tuning parameters in this step method.
@@ -638,13 +672,23 @@ class CategoricalGibbsMetropolis(ArrayStep):
     _state_class = CategoricalGibbsMetropolisState
 
     def __init__(
-        self, vars, proposal="uniform", order="random", model=None, rng: RandomGenerator = None
+        self,
+        vars,
+        *,
+        proposal="uniform",
+        order="random",
+        model=None,
+        rng: RandomGenerator = None,
+        initial_point: PointType | None = None,
+        compile_kwargs: dict | None = None,
+        blocked: bool = True,
     ):
         model = pm.modelcontext(model)
 
         vars = get_value_vars_from_user_vars(vars, model)
 
-        initial_point = model.initial_point()
+        if initial_point is None:
+            initial_point = model.initial_point()
 
         dimcats: list[tuple[int, int]] = []
         # The above variable is a list of pairs (aggregate dimension, number
@@ -693,7 +737,9 @@ class CategoricalGibbsMetropolis(ArrayStep):
         # that indicates whether a draw was done in a tuning phase.
         self.tune = True
 
-        super().__init__(vars, [model.compile_logp()], rng=rng)
+        if compile_kwargs is None:
+            compile_kwargs = {}
+        super().__init__(vars, [model.compile_logp(**compile_kwargs)], blocked=blocked, rng=rng)
 
     def reset_tuning(self):
         # There are no tuning parameters in this step method.
@@ -858,6 +904,7 @@ class DEMetropolis(PopulationArrayStepShared):
     def __init__(
         self,
         vars=None,
+        *,
         S=None,
         proposal_dist=None,
         lamb=None,
@@ -867,11 +914,14 @@ class DEMetropolis(PopulationArrayStepShared):
         model=None,
         mode=None,
         rng=None,
-        **kwargs,
+        initial_point: PointType | None = None,
+        compile_kwargs: dict | None = None,
+        blocked: bool = True,
     ):
         model = pm.modelcontext(model)
-        initial_values = model.initial_point()
-        initial_values_size = sum(initial_values[n.name].size for n in model.value_vars)
+        if initial_point is None:
+            initial_point = model.initial_point()
+        initial_values_size = sum(initial_point[n.name].size for n in model.value_vars)
 
         if vars is None:
             vars = model.continuous_value_vars
@@ -900,9 +950,9 @@ class DEMetropolis(PopulationArrayStepShared):
 
         self.mode = mode
 
-        shared = pm.make_shared_replacements(initial_values, vars, model)
-        self.delta_logp = delta_logp(initial_values, model.logp(), vars, shared)
-        super().__init__(vars, shared, rng=rng)
+        shared = pm.make_shared_replacements(initial_point, vars, model)
+        self.delta_logp = delta_logp(initial_point, model.logp(), vars, shared, compile_kwargs)
+        super().__init__(vars, shared, blocked=blocked, rng=rng)
 
     def astep(self, q0: RaveledVars) -> tuple[RaveledVars, StatsType]:
         point_map_info = q0.point_map_info
@@ -1025,6 +1075,7 @@ class DEMetropolisZ(ArrayStepShared):
     def __init__(
         self,
         vars=None,
+        *,
         S=None,
         proposal_dist=None,
         lamb=None,
@@ -1033,13 +1084,16 @@ class DEMetropolisZ(ArrayStepShared):
         tune_interval=100,
         tune_drop_fraction: float = 0.9,
         model=None,
+        initial_point: PointType | None = None,
+        compile_kwargs: dict | None = None,
         mode=None,
         rng=None,
-        **kwargs,
+        blocked: bool = True,
     ):
         model = pm.modelcontext(model)
-        initial_values = model.initial_point()
-        initial_values_size = sum(initial_values[n.name].size for n in model.value_vars)
+        if initial_point is None:
+            initial_point = model.initial_point()
+        initial_values_size = sum(initial_point[n.name].size for n in model.value_vars)
 
         if vars is None:
             vars = model.continuous_value_vars
@@ -1080,9 +1134,9 @@ class DEMetropolisZ(ArrayStepShared):
 
         self.mode = mode
 
-        shared = pm.make_shared_replacements(initial_values, vars, model)
-        self.delta_logp = delta_logp(initial_values, model.logp(), vars, shared)
-        super().__init__(vars, shared, rng=rng)
+        shared = pm.make_shared_replacements(initial_point, vars, model)
+        self.delta_logp = delta_logp(initial_point, model.logp(), vars, shared, compile_kwargs)
+        super().__init__(vars, shared, blocked=blocked, rng=rng)
 
     def reset_tuning(self):
         """Reset the tuned sampler parameters and history to their initial values."""
@@ -1172,6 +1226,7 @@ def delta_logp(
     logp: pt.TensorVariable,
     vars: list[pt.TensorVariable],
     shared: dict[pt.TensorVariable, pt.sharedvar.TensorSharedVariable],
+    compile_kwargs: dict | None,
 ) -> pytensor.compile.Function:
     [logp0], inarray0 = join_nonshared_inputs(
         point=point, outputs=[logp], inputs=vars, shared_inputs=shared
@@ -1184,6 +1239,8 @@ def delta_logp(
     # Replace any potential duplicated RNG nodes
     (logp1,) = replace_rng_nodes((logp1,))
 
-    f = compile_pymc([inarray1, inarray0], logp1 - logp0)
+    if compile_kwargs is None:
+        compile_kwargs = {}
+    f = compile_pymc([inarray1, inarray0], logp1 - logp0, **compile_kwargs)
     f.trust_input = True
     return f

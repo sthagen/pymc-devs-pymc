@@ -22,7 +22,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from pymc.blocking import DictToArrayBijection, RaveledVars, StatsType
+from pymc.blocking import DictToArrayBijection, PointType, RaveledVars, StatsType
 from pymc.exceptions import SamplingError
 from pymc.model import Point, modelcontext
 from pymc.pytensorf import floatX
@@ -82,11 +82,12 @@ class BaseHMC(GradientSharedStep):
     def __init__(
         self,
         vars=None,
+        *,
         scaling=None,
         step_scale=0.25,
         is_cov=False,
         model=None,
-        blocked=True,
+        blocked: bool = True,
         potential=None,
         dtype=None,
         Emax=1000,
@@ -97,6 +98,7 @@ class BaseHMC(GradientSharedStep):
         adapt_step_size=True,
         step_rand=None,
         rng=None,
+        initial_point: PointType | None = None,
         **pytensor_kwargs,
     ):
         """Set up Hamiltonian samplers with common structures.
@@ -137,20 +139,23 @@ class BaseHMC(GradientSharedStep):
         else:
             vars = get_value_vars_from_user_vars(vars, self._model)
         super().__init__(
-            vars, blocked=blocked, model=self._model, dtype=dtype, rng=rng, **pytensor_kwargs
+            vars,
+            blocked=blocked,
+            model=self._model,
+            dtype=dtype,
+            rng=rng,
+            initial_point=initial_point,
+            **pytensor_kwargs,
         )
 
         self.adapt_step_size = adapt_step_size
         self.Emax = Emax
         self.iter_count = 0
 
-        # We're using the initial/test point to determine the (initial) step
-        # size.
-        # XXX: If the dimensions of these terms change, the step size
-        # dimension-scaling should change as well, no?
-        test_point = self._model.initial_point()
+        if initial_point is None:
+            initial_point = self._model.initial_point()
 
-        nuts_vars = [test_point[v.name] for v in vars]
+        nuts_vars = [initial_point[v.name] for v in vars]
         size = sum(v.size for v in nuts_vars)
 
         self.step_size = step_scale / (size**0.25)
@@ -193,8 +198,6 @@ class BaseHMC(GradientSharedStep):
         process_start = time.process_time()
 
         p0 = self.potential.random()
-        p0 = RaveledVars(p0, q0.point_map_info)
-
         start = self.integrator.compute_state(q0, p0)
 
         warning: SamplerWarning | None = None
@@ -208,7 +211,8 @@ class BaseHMC(GradientSharedStep):
             self.potential.raise_ok(q0.point_map_info)
             message_energy = (
                 "Bad initial energy, check any log probabilities that "
-                f"are inf or -inf, nan or very small:\n{error_logp}"
+                f"are inf or -inf, nan or very small:\n{error_logp}\n."
+                f"Try model.debug() to identify parametrization problems."
             )
             warning = SamplerWarning(
                 WarningType.BAD_ENERGY,
@@ -225,13 +229,13 @@ class BaseHMC(GradientSharedStep):
         if self._step_rand is not None:
             step_size = self._step_rand(step_size, rng=self.rng)
 
-        hmc_step = self._hamiltonian_step(start, p0.data, step_size)
+        hmc_step = self._hamiltonian_step(start, p0, step_size)
 
         perf_end = time.perf_counter()
         process_end = time.process_time()
 
         self.step_adapt.update(hmc_step.accept_stat, adapt_step)
-        self.potential.update(hmc_step.end.q, hmc_step.end.q_grad, self.tune)
+        self.potential.update(hmc_step.end.q.data, hmc_step.end.q_grad, self.tune)
         if hmc_step.divergence_info:
             info = hmc_step.divergence_info
             point = None

@@ -40,8 +40,8 @@ class NDArray(base.BaseTrace):
         `model.unobserved_RVs` is used.
     """
 
-    def __init__(self, name=None, model=None, vars=None, test_point=None):
-        super().__init__(name, model, vars, test_point)
+    def __init__(self, name=None, model=None, vars=None, test_point=None, **kwargs):
+        super().__init__(name, model, vars, test_point, **kwargs)
         self.draw_idx = 0
         self.draws = None
         self.samples = {}
@@ -76,7 +76,7 @@ class NDArray(base.BaseTrace):
         else:  # Otherwise, make array of zeros for each variable.
             self.draws = draws
             for varname, shape in self.var_shapes.items():
-                self.samples[varname] = np.zeros((draws, *shape), dtype=self.var_dtypes[varname])
+                self.samples[varname] = np.empty((draws, *shape), dtype=self.var_dtypes[varname])
 
         if sampler_vars is None:
             return
@@ -105,17 +105,18 @@ class NDArray(base.BaseTrace):
         point: dict
             Values mapped to variable names
         """
-        for varname, value in zip(self.varnames, self.fn(point)):
-            self.samples[varname][self.draw_idx] = value
+        samples = self.samples
+        draw_idx = self.draw_idx
+        for varname, value in zip(self.varnames, self.fn(*point.values())):
+            samples[varname][draw_idx] = value
 
-        if self._stats is not None and sampler_stats is None:
-            raise ValueError("Expected sampler_stats")
-        if self._stats is None and sampler_stats is not None:
-            raise ValueError("Unknown sampler_stats")
         if sampler_stats is not None:
             for data, vars in zip(self._stats, sampler_stats):
                 for key, val in vars.items():
-                    data[key][self.draw_idx] = val
+                    data[key][draw_idx] = val
+        elif self._stats is not None:
+            raise ValueError("Expected sampler_stats")
+
         self.draw_idx += 1
 
     def _get_sampler_stats(
@@ -166,7 +167,13 @@ class NDArray(base.BaseTrace):
         # Only the first `draw_idx` value are valid because of preallocation
         idx = slice(*idx.indices(len(self)))
 
-        sliced = NDArray(model=self.model, vars=self.vars)
+        sliced = type(self)(
+            model=self.model,
+            vars=self.vars,
+            fn=self.fn,
+            var_shapes=self.var_shapes,
+            var_dtypes=self.var_dtypes,
+        )
         sliced.chain = self.chain
         sliced.samples = {varname: values[idx] for varname, values in self.samples.items()}
         sliced.sampler_vars = self.sampler_vars

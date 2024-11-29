@@ -99,26 +99,27 @@ class ArrayStepShared(BlockedStep):
             :py:func:`pymc.util.get_random_generator` for more information.
         """
         self.vars = vars
+        self.var_names = tuple(cast(str, var.name) for var in vars)
         self.shared = {get_var_name(var): shared for var, shared in shared.items()}
         self.blocked = blocked
         self.rng = get_random_generator(rng)
 
     def step(self, point: PointType) -> tuple[PointType, StatsType]:
-        for name, shared_var in self.shared.items():
-            shared_var.set_value(point[name])
+        full_point = None
+        if self.shared:
+            for name, shared_var in self.shared.items():
+                shared_var.set_value(point[name], borrow=True)
+            full_point = point
+            point = {name: point[name] for name in self.var_names}
 
-        var_dict = {cast(str, v.name): point[cast(str, v.name)] for v in self.vars}
-        q = DictToArrayBijection.map(var_dict)
-
+        q = DictToArrayBijection.map(point)
         apoint, stats = self.astep(q)
 
         if not isinstance(apoint, RaveledVars):
             # We assume that the mapping has stayed the same
             apoint = RaveledVars(apoint, q.point_map_info)
 
-        new_point = DictToArrayBijection.rmap(apoint, start_point=point)
-
-        return new_point, stats
+        return DictToArrayBijection.rmap(apoint, start_point=full_point), stats
 
     @abstractmethod
     def astep(self, q0: RaveledVars) -> tuple[RaveledVars, StatsType]:
@@ -174,27 +175,34 @@ class GradientSharedStep(ArrayStepShared):
     def __init__(
         self,
         vars,
+        *,
         model=None,
-        blocked=True,
+        blocked: bool = True,
         dtype=None,
         logp_dlogp_func=None,
         rng: RandomGenerator = None,
+        initial_point: PointType | None = None,
+        compile_kwargs: dict | None = None,
         **pytensor_kwargs,
     ):
         model = modelcontext(model)
 
         if logp_dlogp_func is None:
-            func = model.logp_dlogp_function(vars, dtype=dtype, **pytensor_kwargs)
-        else:
-            func = logp_dlogp_func
+            if compile_kwargs is None:
+                compile_kwargs = {}
+            logp_dlogp_func = model.logp_dlogp_function(
+                vars,
+                dtype=dtype,
+                ravel_inputs=True,
+                initial_point=initial_point,
+                **compile_kwargs,
+                **pytensor_kwargs,
+            )
+            logp_dlogp_func.trust_input = True
 
-        self._logp_dlogp_func = func
+        self._logp_dlogp_func = logp_dlogp_func
 
-        super().__init__(vars, func._extra_vars_shared, blocked, rng=rng)
-
-    def step(self, point) -> tuple[PointType, StatsType]:
-        self._logp_dlogp_func._extra_are_set = True
-        return super().step(point)
+        super().__init__(vars, logp_dlogp_func._extra_vars_shared, blocked, rng=rng)
 
 
 def metrop_select(
