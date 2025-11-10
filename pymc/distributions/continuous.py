@@ -53,6 +53,7 @@ from pytensor.tensor.random.op import RandomVariable
 from pytensor.tensor.random.utils import normalize_size_param
 from pytensor.tensor.variable import TensorConstant, TensorVariable
 
+from pymc.distributions.custom import CustomDist
 from pymc.logprob.abstract import _logprob_helper
 from pymc.logprob.basic import TensorLike, icdf
 from pymc.pytensorf import normalize_rng_param
@@ -92,7 +93,7 @@ from pymc.distributions.dist_math import (
 from pymc.distributions.distribution import DIST_PARAMETER_TYPES, Continuous, SymbolicRandomVariable
 from pymc.distributions.shape_utils import implicit_size_from_params, rv_size_is_none
 from pymc.distributions.transforms import _default_transform
-from pymc.math import invlogit, logdiffexp, logit
+from pymc.math import invlogit, logdiffexp
 
 __all__ = [
     "AsymmetricLaplace",
@@ -1323,6 +1324,16 @@ class Kumaraswamy(UnitContinuous):
             msg="a > 0, b > 0",
         )
 
+    def icdf(value, a, b):
+        res = pt.exp(pt.reciprocal(a) * pt.log1mexp(pt.reciprocal(b) * pt.log1p(-value)))
+        res = check_icdf_value(res, value)
+        return check_icdf_parameters(
+            res,
+            a > 0,
+            b > 0,
+            msg="a > 0, b > 0",
+        )
+
 
 class Exponential(PositiveContinuous):
     r"""
@@ -2531,6 +2542,9 @@ class InverseGamma(PositiveContinuous):
             msg="alpha > 0, beta > 0",
         )
 
+    def icdf(value, alpha, beta):
+        return icdf(1 / Gamma.dist(alpha, beta), value)
+
 
 class ChiSquared:
     r"""
@@ -2829,6 +2843,13 @@ class HalfStudentT(PositiveContinuous):
             nu > 0,
             msg="sigma > 0, nu > 0",
         )
+
+    def icdf(value, nu, sigma):
+        # Map half-t quantiles to full StudentT quantiles:
+        # F_half^{-1}(u) = F_t^{-1}((u + 1)/2; nu, mu=0, sigma)
+        res = icdf(StudentT.dist(nu, sigma=sigma), (value + 1.0) / 2.0)
+        res = check_icdf_value(res, value)
+        return res
 
 
 class ExGaussianRV(SymbolicRandomVariable):
@@ -3603,28 +3624,7 @@ class Logistic(Continuous):
         )
 
 
-class LogitNormalRV(SymbolicRandomVariable):
-    name = "logit_normal"
-    extended_signature = "[rng],[size],(),()->[rng],()"
-    _print_name = ("LogitNormal", "\\operatorname{LogitNormal}")
-
-    @classmethod
-    def rv_op(cls, mu, sigma, *, size=None, rng=None):
-        mu = pt.as_tensor(mu)
-        sigma = pt.as_tensor(sigma)
-        rng = normalize_rng_param(rng)
-        size = normalize_size_param(size)
-
-        next_rng, normal_draws = normal(loc=mu, scale=sigma, size=size, rng=rng).owner.outputs
-        draws = pt.expit(normal_draws)
-
-        return cls(
-            inputs=[rng, size, mu, sigma],
-            outputs=[next_rng, draws],
-        )(rng, size, mu, sigma)
-
-
-class LogitNormal(UnitContinuous):
+class LogitNormal:
     r"""
     Logit-Normal distribution.
 
@@ -3672,37 +3672,26 @@ class LogitNormal(UnitContinuous):
         Defaults to 1.
     """
 
-    rv_type = LogitNormalRV
-    rv_op = LogitNormalRV.rv_op
+    @staticmethod
+    def logitnormal_dist(mu, sigma, size):
+        return invlogit(Normal.dist(mu=mu, sigma=sigma, size=size))
+
+    def __new__(cls, name, mu=0, sigma=None, tau=None, **kwargs):
+        _, sigma = get_tau_sigma(tau=tau, sigma=sigma)
+        return CustomDist(
+            name,
+            mu,
+            sigma,
+            dist=cls.logitnormal_dist,
+            class_name="LogitNormal",
+            **kwargs,
+        )
 
     @classmethod
     def dist(cls, mu=0, sigma=None, tau=None, **kwargs):
         _, sigma = get_tau_sigma(tau=tau, sigma=sigma)
-        return super().dist([mu, sigma], **kwargs)
-
-    def support_point(rv, size, mu, sigma):
-        median, _ = pt.broadcast_arrays(invlogit(mu), sigma)
-        if not rv_size_is_none(size):
-            median = pt.full(size, median)
-        return median
-
-    def logp(value, mu, sigma):
-        tau, _ = get_tau_sigma(sigma=sigma)
-
-        res = pt.switch(
-            pt.or_(pt.le(value, 0), pt.ge(value, 1)),
-            -np.inf,
-            (
-                -0.5 * tau * (logit(value) - mu) ** 2
-                + 0.5 * pt.log(tau / (2.0 * np.pi))
-                - pt.log(value * (1 - value))
-            ),
-        )
-
-        return check_parameters(
-            res,
-            tau > 0,
-            msg="tau > 0",
+        return CustomDist.dist(
+            mu, sigma, dist=cls.logitnormal_dist, class_name="LogitNormal", **kwargs
         )
 
 
