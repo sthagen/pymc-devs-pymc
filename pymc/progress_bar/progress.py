@@ -13,6 +13,7 @@
 #   limitations under the License.
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, Literal, Protocol, Self
 
@@ -56,8 +57,8 @@ class ProgressBackend(Protocol):
 
     def update(
         self,
-        chain_idx: int,
-        draw: int,
+        task_id: int,
+        advance: int | float,
         failing: bool,
         stats: dict[str, Any],
         is_last: bool,
@@ -68,24 +69,28 @@ class NullProgressBackend(nullcontext):
     def update(self, *args, **kwargs): ...
 
 
-class ProgressBarManager:
-    """Manage progress bars displayed during sampling.
+class ProgressBarManager(ABC):
+    """Abstract base class for progress bar managers.
 
-    This class automatically detects the execution environment and uses the
-    appropriate rendering backend:
-    - Rich-based terminal rendering for standard Python/Jupyter environments
-    - HTML rendering for marimo notebooks
+    This class handles the common logic for progress bar management including:
+    - Environment detection (terminal vs marimo notebook)
+    - Backend selection and initialization
+    - Configuration parsing
 
-    The manager handles configuration parsing and stat extraction, delegating
-    the actual rendering to the appropriate backend.
+    Subclasses implement sampling-specific logic like how to track progress
+    and how to extract statistics from step methods.
     """
+
+    _backend: ProgressBackend
+    _show_progress: bool
+    combined_progress: bool
+    full_stats: bool
+    n_bars: int
+    step_name: str = "Completed"
 
     def __init__(
         self,
-        step_method: BlockedStep | CompoundStep,
-        chains: int,
-        draws: int,
-        tune: int,
+        n_bars: int,
         progressbar: bool | ProgressBarOptions = True,
         progressbar_theme: Theme | str | None = None,
     ):
@@ -93,21 +98,16 @@ class ProgressBarManager:
 
         Parameters
         ----------
-        step_method : BlockedStep or CompoundStep
-            The step method being used for sampling
-        chains : int
-            Number of chains being sampled
-        draws : int
-            Number of draws per chain
-        tune : int
-            Number of tuning steps per chain
-        progressbar : bool or ProgressBarType
+        n_bars : int
+            Number of progress bars to draw
+        progressbar : bool or ProgressBarOptions
             Progress bar display mode
-        progressbar_theme : Theme, optional
-            Rich theme for terminal progress bars
-        progressbar_css : str, optional
-            Path to custom CSS file for marimo progress bars
+        progressbar_theme : Theme or str, optional
+            Rich theme for terminal progress bars, or CSS string for marimo
         """
+        self.n_bars = n_bars
+        self._progressbar_theme = progressbar_theme
+
         match progressbar:
             case True:
                 self.combined_progress = False
@@ -142,41 +142,130 @@ class ProgressBarManager:
 
         self._show_progress = show_progress
 
+    def _create_backend(
+        self,
+        total: int | float,
+        progress_columns: list,
+        progress_stats: dict[str, list[Any]],
+    ) -> ProgressBackend:
+        """Create the appropriate backend based on environment.
+
+        Parameters
+        ----------
+        total : int
+            Total number of progress units (draws, etc.)
+        progress_columns : list
+            Column definitions for the progress bar
+        progress_stats : dict
+            Initial statistics values by chain
+
+        Returns
+        -------
+        ProgressBackend
+            The appropriate backend for the current environment
+        """
+        if not self._show_progress:
+            return NullProgressBackend()
+        elif in_marimo_notebook():
+            return MarimoProgressBackend(
+                step_name=self.step_name,
+                n_bars=1 if self.combined_progress else self.n_bars,
+                total=total,
+                combined=self.combined_progress,
+                full_stats=self.full_stats,
+                css_theme=self._progressbar_theme
+                if isinstance(self._progressbar_theme, str)
+                else None,
+            )
+        else:
+            return RichProgressBackend(
+                step_name=self.step_name,
+                n_bars=1 if self.combined_progress else self.n_bars,
+                total=total,
+                combined=self.combined_progress,
+                full_stats=self.full_stats,
+                progress_columns=progress_columns,
+                progress_stats=progress_stats,
+                theme=self._progressbar_theme
+                if isinstance(self._progressbar_theme, Theme)
+                else None,
+            )
+
+    def __enter__(self) -> Self:
+        self._backend.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return self._backend.__exit__(exc_type, exc_val, exc_tb)
+
+    @abstractmethod
+    def update(self, *args, **kwargs) -> None:
+        """Update progress bar with new sampling statistics.
+
+        Subclasses must implement this with their specific signature.
+        """
+        ...
+
+
+class MCMCProgressBarManager(ProgressBarManager):
+    """Progress bar manager for MCMC sampling.
+
+    Tracks progress via draw count with support for tuning phases.
+    """
+
+    step_name: str = "Draws"
+
+    def __init__(
+        self,
+        step_method: BlockedStep | CompoundStep,
+        chains: int,
+        draws: int,
+        tune: int,
+        progressbar: bool | ProgressBarOptions = True,
+        progressbar_theme: Theme | str | None = None,
+    ):
+        """Initialize the MCMC progress bar manager.
+
+        Parameters
+        ----------
+        step_method : BlockedStep or CompoundStep
+            The step method being used for sampling
+        chains : int
+            Number of chains being sampled
+        draws : int
+            Number of draws per chain
+        tune : int
+            Number of tuning steps per chain
+        progressbar : bool or ProgressBarOptions
+            Progress bar display mode
+        progressbar_theme : Theme or str, optional
+            Rich theme for terminal progress bars, or CSS string for marimo
+        """
+        super().__init__(
+            n_bars=chains,
+            progressbar=progressbar,
+            progressbar_theme=progressbar_theme,
+        )
+
         progress_columns, progress_stats = step_method._progressbar_config(chains)
+        progress_stats["draws"] = [0] * chains
+
         self.progress_stats = progress_stats
         self.update_stats_functions = step_method._make_progressbar_update_functions()
 
         self.completed_draws = 0
         self.total_draws = draws + tune
-        self.chains = chains
-        self._backend: ProgressBackend
 
-        if not show_progress:
-            self._backend = NullProgressBackend()
-        elif in_marimo_notebook():
-            self._backend = MarimoProgressBackend(
-                chains=chains,
-                total_draws=self.total_draws,
-                combined=self.combined_progress,
-                full_stats=self.full_stats,
-                css_theme=progressbar_theme if isinstance(progressbar_theme, str) else None,
-            )
-        else:
-            self._backend = RichProgressBackend(
-                chains=chains,
-                total_draws=self.total_draws,
-                combined=self.combined_progress,
-                full_stats=self.full_stats,
-                progress_columns=progress_columns,
-                progress_stats=progress_stats,
-                theme=progressbar_theme if isinstance(progressbar_theme, Theme) else None,
-            )
+        self._backend = self._create_backend(
+            total=self.total_draws * chains if self.combined_progress else self.total_draws,
+            progress_columns=progress_columns,
+            progress_stats=progress_stats,
+        )
 
-    def __enter__(self) -> ProgressBackend:
-        return self._backend.__enter__()
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        return self._backend.__exit__(exc_type, exc_val, exc_tb)
+    @property
+    def chains(self) -> int:
+        """Number of chains being sampled."""
+        return self.n_bars
 
     def _extract_stats(self, stats) -> tuple[bool, dict[str, Any]]:
         """Extract and process stats from step methods."""
@@ -202,7 +291,21 @@ class ProgressBarManager:
         return failing, all_step_stats
 
     def update(self, chain_idx: int, is_last: bool, draw: int, tuning: bool, stats) -> None:
-        """Update progress bar with new sampling statistics."""
+        """Update progress bar with new sampling statistics.
+
+        Parameters
+        ----------
+        chain_idx : int
+            Index of the chain being updated
+        is_last : bool
+            Whether this is the final update
+        draw : int
+            Current draw number
+        tuning : bool
+            Whether the chain is in tuning phase
+        stats : list
+            Statistics from each step method
+        """
         if not self._show_progress:
             return
 
@@ -212,10 +315,11 @@ class ProgressBarManager:
             chain_idx = 0
 
         failing, all_step_stats = self._extract_stats(stats)
+        all_step_stats["draws"] = draw
 
         self._backend.update(
-            chain_idx=chain_idx,
-            draw=draw,
+            task_id=chain_idx,
+            advance=1,
             failing=failing,
             stats=all_step_stats,
             is_last=is_last,

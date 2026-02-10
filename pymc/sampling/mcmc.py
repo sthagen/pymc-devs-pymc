@@ -54,7 +54,7 @@ from pymc.exceptions import SamplingError
 from pymc.initial_point import PointType, StartDict, make_initial_point_fns_per_chain
 from pymc.model import Model, modelcontext
 from pymc.progress_bar import (
-    ProgressBarManager,
+    MCMCProgressBarManager,
     ProgressBarOptions,
     default_progress_theme,
 )
@@ -1225,7 +1225,7 @@ def _sample_many(
         Step function
     """
     initial_step_state = step.sampling_state
-    progress_manager = ProgressBarManager(
+    progress_manager = MCMCProgressBarManager(
         step_method=step,
         chains=chains,
         draws=draws - kwargs.get("tune", 0),
@@ -1262,7 +1262,7 @@ def _sample(
     tune: int,
     model: Model | None = None,
     callback=None,
-    progress_manager: ProgressBarManager,
+    progress_manager: MCMCProgressBarManager,
     **kwargs,
 ) -> None:
     """Sample one chain (singleprocess).

@@ -13,6 +13,7 @@
 #   limitations under the License.
 
 from pymc.progress_bar.progress import (
+    MCMCProgressBarManager,
     ProgressBarManager,
     ProgressBarOptions,
     create_simple_progress,
