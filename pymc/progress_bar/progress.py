@@ -30,6 +30,7 @@ from pymc.progress_bar.rich_progress import (
 )
 
 if TYPE_CHECKING:
+    from pymc.smc.kernels import SMC_KERNEL
     from pymc.step_methods.compound import BlockedStep, CompoundStep
 
 
@@ -321,6 +322,113 @@ class MCMCProgressBarManager(ProgressBarManager):
             task_id=chain_idx,
             advance=1,
             failing=failing,
+            stats=all_step_stats,
+            is_last=is_last,
+        )
+
+
+class SMCProgressBarManager(ProgressBarManager):
+    """Progress bar manager for SMC sampling.
+
+    Unlike MCMC which tracks a fixed number of draws, SMC tracks progress
+    via the beta parameter (inverse temperature) which goes from 0 to 1.
+    """
+
+    step_name: str = "Stage"
+
+    def __init__(
+        self,
+        kernel: SMC_KERNEL,
+        chains: int,
+        progressbar: bool = True,
+        progressbar_theme: Theme | str | None = None,
+    ):
+        """Initialize the SMC progress bar manager.
+
+        Parameters
+        ----------
+        kernel : SMC_KERNEL
+            The SMC kernel being used
+        chains : int
+            Number of processes being run.
+        progressbar : bool
+            Whether to display the progress bar
+        progressbar_theme : Theme or str, optional
+            Rich theme for terminal progress bars, or CSS string for marimo
+        """
+        # SMC doesn't use combined/split modes - each chain runs independently
+        # and beta goes from 0 to 1, so we force split mode with full stats
+        super().__init__(
+            n_bars=chains,
+            progressbar=progressbar,
+            progressbar_theme=progressbar_theme,
+        )
+        # Override base class settings for SMC-specific behavior
+        self.combined_progress = False
+        self.full_stats = True
+
+        progress_columns, progress_stats = kernel._progressbar_config(chains)
+        progress_stats["stage"] = [0] * chains
+
+        self.progress_stats = progress_stats
+        self.update_stats_functions = kernel._make_progressbar_update_functions()
+
+        self._backend = self._create_backend(
+            total=1.0,
+            progress_columns=progress_columns,
+            progress_stats=progress_stats,
+        )
+
+    @property
+    def chains(self):
+        return self.n_bars
+
+    def update(
+        self,
+        chain_idx: int,
+        stage: int,
+        beta: float,
+        old_beta: float | None = None,
+        is_last: bool = False,
+    ) -> None:
+        """Update a progress bar.
+
+        Parameters
+        ----------
+        chain_idx : int
+            Index of the chain being updated
+        stage : int
+            Current stage number
+        beta : float
+            Current beta value (0 to 1)
+        old_beta : float, optional
+            Previous beta value, used to compute advancement
+        is_last : bool
+            Whether this is the last update for this chain
+        """
+        if not self._show_progress:
+            return
+
+        stats = [{"beta": beta}]
+        all_step_stats: dict[str, Any] = {}
+
+        chain_progress_stats = [
+            update_stats_fn(step_stats)
+            for update_stats_fn, step_stats in zip(self.update_stats_functions, stats, strict=True)
+        ]
+
+        for step_stats in chain_progress_stats:
+            for key, val in step_stats.items():
+                all_step_stats[key] = val
+
+        all_step_stats["stage"] = stage
+
+        advance = beta - (old_beta if old_beta is not None else 0.0)
+
+        self._backend.update(
+            task_id=chain_idx,
+            advance=advance,
+            failing=False,
             stats=all_step_stats,
             is_last=is_last,
         )
